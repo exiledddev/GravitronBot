@@ -1,0 +1,22 @@
+{
+  "name": "gravitron-discord-bot",
+  "version": "1.0.0",
+  "description": "Starter Discord.js bot with slash command registration",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "register": "node cmd-register.js",
+    "check": "node --check bot.js && node --check cmd-register.js"
+  },
+  "keywords": [
+    "discord",
+    "discord.js",
+    "bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^16.6.1"
+  }
+}
