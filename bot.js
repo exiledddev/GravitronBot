@@ -9,6 +9,7 @@ const {
   Events,
   GatewayIntentBits,
   ModalBuilder,
+  PermissionFlagsBits,
   TextInputBuilder,
   TextInputStyle, roleMention,
 } = require('discord.js');
@@ -80,13 +81,15 @@ function findExistingActorApplicationChannel(guild, userId) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!isAuthorized(interaction)) {
-    return;
-  }
+  if (interaction.isChatInputCommand()) {
+    if (!isAuthorized(interaction)) {
+      return;
+    }
 
-  if (interaction.isChatInputCommand() && interaction.commandName === 'ping') {
-    await interaction.reply('Pong!');
-    return;
+    if (interaction.commandName === 'ping') {
+      await interaction.reply('Pong!');
+      return;
+    }
   }
 
   if (interaction.isButton() && interaction.customId === APPLY_BUTTON_ID) {
@@ -165,6 +168,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         name: channelName,
         type: ChannelType.GuildText,
         topic: `${ACTOR_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
         reason: `Actor application submitted by ${interaction.user.tag}`,
       });
 
@@ -223,9 +242,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply('Role not found. Check the role ID.');
         return;
       }
-      
-      await interaction.member.roles.add(role);
-      await interaction.reply(`Congratulations <@${interaction.user.id}>, your application in Island SMP has been accepted! Welcome to the team!\n\nPlease join this discord server: https://discord.gg/KNVmAkBPdf`);
+
+      const channelTopic = interaction.channel.topic || '';
+      const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`));
+      const applicantId = topicMatch ? topicMatch[1] : null;
+
+      if (!applicantId) {
+        await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
+        return;
+      }
+
+      const applicantMember = await interaction.guild.members.fetch(applicantId);
+      await applicantMember.roles.add(role);
+      await interaction.reply(`Congratulations <@${applicantId}>, your application in Island SMP has been accepted! Welcome to the team!\n\nPlease join this discord server: https://discord.gg/KNVmAkBPdf`);
     } catch (error) {
       console.error('Failed to add role:', error);
       await interaction.reply('Failed to add role. Check my permissions.');
@@ -252,7 +281,7 @@ client.on(Events.MessageCreate, async (message) => {
         .setDescription('Open a ticket to apply to become an Actor in our series.\n-----------------------------------------------------------')
         .setColor(0x242429)
         .addFields(
-            { name:"Requirements", value:"➡️ Be at least 16 years old.\n➡️ Have a microphone.\n➡️ Must be at least 16 years old.\n➡️ Speak fluent english. "}
+            { name:"Requirements", value:"➡️ Be at least 16 years old.\n➡️ Have a microphone.\n➡️ Speak fluent english. "}
         )
         .setFooter(
             {text:"Click on the button below to begin your application!"}
