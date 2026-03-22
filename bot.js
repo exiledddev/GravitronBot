@@ -80,6 +80,13 @@ function findExistingActorApplicationChannel(guild, userId) {
   );
 }
 
+function getApplicantIdFromChannel(channel) {
+  const channelTopic = channel?.topic || '';
+  const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`));
+
+  return topicMatch ? topicMatch[1] : null;
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
     if (!isAuthorized(interaction)) {
@@ -243,9 +250,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const channelTopic = interaction.channel.topic || '';
-      const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`));
-      const applicantId = topicMatch ? topicMatch[1] : null;
+      const applicantId = getApplicantIdFromChannel(interaction.channel);
 
       if (!applicantId) {
         await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
@@ -261,11 +266,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
   if(interaction.isChatInputCommand() && interaction.commandName === 'reject') {
-    await interaction.user.createDM().then(async (dmChannel) => {
+    const applicantId = getApplicantIdFromChannel(interaction.channel);
+
+    if (!applicantId) {
+      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
+      return;
+    }
+
+    try {
+      const applicantMember = await interaction.guild.members.fetch(applicantId);
+      const dmChannel = await applicantMember.createDM();
       await dmChannel.send('Your application in Island SMP has been rejected. Thank you for your interest!');
-    }).catch((error) => {
-      console.error('Failed to send DM to user:', error);
-    });
+    } catch (error) {
+      console.error('Failed to send DM to applicant:', error);
+    }
+
     await interaction.guild.channels.delete(interaction.channelId);
   }
 });
