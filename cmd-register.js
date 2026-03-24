@@ -25,6 +25,16 @@ const commands = [
       .setName('reject')
       .setDescription('Reject an actor application by providing the applicant\'s username.')
       .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('close')
+      .setDescription('Close the applicant\'s ticket.')
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('faq')
+      .setDescription('Display frequently asked questions.')
+      .toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);

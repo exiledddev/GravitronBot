@@ -11,7 +11,8 @@ const {
   ModalBuilder,
   PermissionFlagsBits,
   TextInputBuilder,
-  TextInputStyle, roleMention,
+  ChatInputBuilder,
+  TextInputStyle, roleMention, channelMention, MessageFlagsBitField,
 } = require('discord.js');
 
 const token = process.env.DISCORD_TOKEN;
@@ -89,9 +90,6 @@ function getApplicantIdFromChannel(channel) {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
-    if (!isAuthorized(interaction)) {
-      return;
-    }
 
     if (interaction.commandName === 'ping') {
       await interaction.reply('Pong!');
@@ -243,6 +241,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
   if(interaction.isChatInputCommand() && interaction.commandName === 'accept') {
+    if (!isAuthorized(interaction)) {
+      return;
+    }
     try {
       const role = interaction.guild.roles.cache.get('1475102281753038858');
       if (!role) {
@@ -266,8 +267,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
   if(interaction.isChatInputCommand() && interaction.commandName === 'reject') {
+    if (!isAuthorized(interaction)) {
+      return;
+    }
     const applicantId = getApplicantIdFromChannel(interaction.channel);
-
     if (!applicantId) {
       await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
       return;
@@ -283,20 +286,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     await interaction.guild.channels.delete(interaction.channelId);
   }
+  if(interaction.isChatInputCommand() && interaction.commandName === 'close') {
+    if (!isAuthorized(interaction)) {
+      return;
+    }
+    const applicantId = getApplicantIdFromChannel(interaction.channel);
+    if (!applicantId) {
+      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
+      return;
+    }
+    try {
+      const applicantMember = await interaction.guild.members.fetch(applicantId);
+      const dmChannel = await applicantMember.createDM();
+      await dmChannel.send('Your ticket in Island SMP has been closed.');
+      await interaction.guild.channels.delete(interaction.channelId);
+    } catch (e) {
+      console.error('Failed to send DM to applicant:', e);
+    }
+
+  }
+
+  if(interaction.isChatInputCommand() && interaction.commandName === 'faq') {
+    const embed = new EmbedBuilder()
+        .setTitle('FAQ')
+        .setDescription('Frequently Asked Questions')
+        .addFields(
+            { name:"Can I join on Bedrock?", value:"No, this server is Java Edition only."},
+            { name:"Can cracked users join?", value:"No, this server is premium and we follow the Mojang EULA."},
+            { name:"How do I apply?", value:`${channelMention('1156739680994328616')} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`},
+            { name:"What happens after I apply?", value:"After you submit your application, a new channel will be created for you where you will be asked to submit an acting test. Our team will review your application and acting test, and if you are accepted, you will receive a role that gives you access to the actor channels and updates about the series. Do note that being accepted can take up to a day or two, depending on how our managers are."},
+            { name:"What is the IP?", value:"This is not a public SMP. There is no IP to join, and you cannot play whenever you'd like. You can only play when we host recording events in order to contribute to our storyline. For more information, do /faq in #faq."}
+        )
+        .setColor(0x242429);
+
+    await interaction.reply({ embeds: [embed], ephemeral:true});
+  }
 });
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
-  if (message.author.id !== ALLOWED_USER_ID) return;
 
   if (message.content.trim().toLowerCase() === 'app') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
     await message.delete();
     const embed = new EmbedBuilder()
         .setTitle('Actor Applications')
         .setDescription('Open a ticket to apply to become an Actor in our series.\n-----------------------------------------------------------')
         .setColor(0x242429)
         .addFields(
-            { name:"Requirements", value:"➡️ Be at least 16 years old.\n➡️ Have a microphone.\n➡️ Speak fluent english. "}
+            { name:"Requirements", value:"➡️ **Be at least 16 years old.**\n➡️ Have a microphone.\n➡️ Speak fluent english. "}
         )
         .setFooter(
             {text:"Click on the button below to begin your application!"}
@@ -310,6 +348,28 @@ client.on(Events.MessageCreate, async (message) => {
     );
 
     await message.channel.send({ embeds: [embed], components: [buttonRow] });
+  }
+
+  if (message.content.includes("how") && message.content.includes("apply")) {
+    await message.reply(
+        {content:`${channelMention('1156739680994328616')} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`}
+    );
+  }
+  if (message.content.includes("how") && message.content.includes("join")) {
+    await message.reply(
+        {content:`${channelMention('1485697198963294342')} is where you can find information about how to participate in our series!` }
+    );
+  }
+
+  if(message.content.trim().toLowerCase() === 'info') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
+    const embed = new EmbedBuilder()
+        .setTitle('📌 Information')
+        .setDescription(`➡️ **What is Island SMP?**\nIsland SMP is a new scripted SMP content series which aims to bring cinematography and epicness to the Minecraft scene.\n\n➡️ **How do I apply?**\nTo apply, simply go to ${channelMention('1156739680994328616')} and click the "Apply for Actor" button. Fill out the form, and our team will review your application.\n\n➡️ **What are the requirements?**\n- Be at least 16 years old.\n- Have a microphone.\n- Speak fluent English.\n\n➡️ **What happens after I apply?**\nAfter you submit your application, a new channel will be created for you where you will be asked to submit an acting test. Our team will review your application and acting test, and if you are accepted, you will receive a role that gives you access to the actor channels and updates about the series. Do note that being accepted can take up to a day or two, depending on how our managers are.\n\n➡️ **Further Clarification**\nThis is not a public SMP. There is no IP to join, and you cannot play whenever you'd like. You can only play when we host recording events in order to contribute to our storyline. For more information, do /faq in ${channelMention('1156740100076617728')}.`)
+        .setColor(0x242429);
+
+    await message.delete();
+    await message.channel.send({ embeds: [embed] });
   }
 });
 
