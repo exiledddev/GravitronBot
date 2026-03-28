@@ -35,8 +35,11 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 const APPLY_BUTTON_ID = 'actor_apply_open';
+const BUILDER_BUTTON_ID = 'builder_apply_open'
 const APPLY_MODAL_ID = 'actor_apply_form';
+const BUILDER_MODAL_ID = 'builder_apply_form';
 const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
+const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
 
 function isAuthorized(interaction) {
@@ -57,7 +60,21 @@ function sanitizeChannelPart(value) {
 }
 
 function getUniqueActorChannelName(guild, usernamePart) {
-  const base = `actor-${usernamePart}`.slice(0, 100);
+  const base = `🎭actor-${usernamePart}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function getUniqueBuilderChannelName(guild, usernamePart) {
+  const base = `🪴builder-${usernamePart}`.slice(0, 100);
   let candidate = base;
   let index = 2;
 
@@ -81,9 +98,20 @@ function findExistingActorApplicationChannel(guild, userId) {
   );
 }
 
+function findExistingBuilderApplicationChannel(guild, userId) {
+  const marker = `${BUILDER_TOPIC_PREFIX}${userId}`;
+
+  return guild.channels.cache.find(
+      (channel) =>
+          channel.type === ChannelType.GuildText &&
+          typeof channel.topic === 'string' &&
+          channel.topic.startsWith(marker),
+  );
+}
+
 function getApplicantIdFromChannel(channel) {
   const channelTopic = channel?.topic || '';
-  const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`));
+  const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`)) || channelTopic.match(new RegExp(`^${BUILDER_TOPIC_PREFIX}(\\d+)`));
 
   return topicMatch ? topicMatch[1] : null;
 }
@@ -135,6 +163,51 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new ActionRowBuilder().addComponents(nameInput),
         new ActionRowBuilder().addComponents(ageInput),
         new ActionRowBuilder().addComponents(whyInput),
+        new ActionRowBuilder().addComponents(expInput),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === BUILDER_BUTTON_ID) {
+    const modal = new ModalBuilder()
+        .setCustomId(BUILDER_MODAL_ID)
+        .setTitle('Builder Application');
+
+    const nameInput = new TextInputBuilder()
+        .setCustomId('applicant_name')
+        .setLabel('What is your name?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(50);
+
+    const ageInput = new TextInputBuilder()
+        .setCustomId('applicant_age')
+        .setLabel('How old are you?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(2);
+
+    const lengthInput = new TextInputBuilder()
+        .setCustomId('applicant_length')
+        .setLabel('How long have you been building in Minecraft?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    const expInput = new TextInputBuilder()
+        .setCustomId('applicant_exp')
+        .setLabel('Building experience (optional)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(500);
+
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(ageInput),
+        new ActionRowBuilder().addComponents(lengthInput),
         new ActionRowBuilder().addComponents(expInput),
     );
 
@@ -240,27 +313,128 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
   }
+
+  // BUILDER LOGIC
+  if (interaction.isModalSubmit() && interaction.customId === BUILDER_MODAL_ID) {
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        ephemeral: true,
+        content: 'This form can only be submitted inside a server.',
+      });
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('applicant_name').trim();
+    const age = interaction.fields.getTextInputValue('applicant_age').trim();
+    const reason = interaction.fields.getTextInputValue('applicant_length').trim();
+    const exp = interaction.fields.getTextInputValue('applicant_exp').trim();
+
+    const existingChannel = findExistingBuilderApplicationChannel(interaction.guild, interaction.user.id);
+    if (existingChannel) {
+      await interaction.reply({
+        ephemeral: true,
+        content: `You already have an open actor application channel: ${existingChannel}`,
+      });
+      return;
+    }
+
+    const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
+    const channelName = getUniqueBuilderChannelName(interaction.guild, usernamePart);
+
+    try {
+      const applicationChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        topic: `${BUILDER_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
+        reason: `Builder application submitted by ${interaction.user.tag}`,
+      });
+
+      const appEmbed = new EmbedBuilder()
+          .setTitle('Builder Application')
+          .setDescription(`Application submitted by <@${interaction.user.id}>`)
+          .addFields(
+              {name:"Name", value:`${name}`},
+              {name:"Age", value:`${age}`},
+              {name:"Building experience", value:`${reason}`},
+              {name:"Previous experience", value:`${exp || 'Not provided.'}`}
+          )
+          .setFooter(
+              {text:"Please do not ping anyone until we review your application."}
+          )
+          .setColor(0xFF0000);
+
+      await applicationChannel.send(
+          {content:`${roleMention('1475116965457825936')}`, embeds: [appEmbed] }
+      );
+      await applicationChannel.send(
+          {content:`Hey there <@${interaction.user.id}>!\n\nThanks for applying to become a Builder in our series!\n\n` +
+                `In order to proceed with your application, please submit a couple of images with your past builds.\n\n⚠️ **Please note that if any of the images submitted are stolen and not yours, you will be banned.**`}
+      )
+      // await applicationChannel.send(
+      //     {embeds: [actEmbed]}
+      // )
+
+      await interaction.reply({
+        ephemeral: true,
+        content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
+      });
+    } catch (error) {
+      console.error('Failed to create builder application channel:', error);
+      await interaction.reply({
+        ephemeral: true,
+        content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
+      });
+    }
+  }
   if(interaction.isChatInputCommand() && interaction.commandName === 'accept') {
     if (!isAuthorized(interaction)) {
       return;
     }
     try {
-      const role = interaction.guild.roles.cache.get('1475102281753038858');
+      const applicantId = getApplicantIdFromChannel(interaction.channel);
+
+      if (!applicantId) {
+        await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor or builder application channel.');
+        return;
+      }
+
+      const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
+      const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
+
+      if (!isActorChannel && !isBuilderChannel) {
+        await interaction.reply('This command can only be used in actor or builder application channels.');
+        return;
+      }
+
+      const roleId = isActorChannel ? '1475102281753038858' : '1475102345854713977';
+      const role = interaction.guild.roles.cache.get(roleId);
+      
       if (!role) {
         await interaction.reply('Role not found. Check the role ID.');
         return;
       }
 
-      const applicantId = getApplicantIdFromChannel(interaction.channel);
-
-      if (!applicantId) {
-        await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
-        return;
-      }
-
       const applicantMember = await interaction.guild.members.fetch(applicantId);
       await applicantMember.roles.add(role);
-      await interaction.reply(`Congratulations <@${applicantId}>, your application in Island SMP has been accepted! Welcome to the team!\n\nPlease join this discord server: https://discord.gg/KNVmAkBPdf`);
+      
+      const roleType = isActorChannel ? 'Actor' : 'Builder';
+      await interaction.reply(`Congratulations <@${applicantId}>, your ${roleType} application in Island SMP has been accepted! Welcome to the team!\n\nPlease join this discord server: https://discord.gg/DRmd22gCCf`);
     } catch (error) {
       console.error('Failed to add role:', error);
       await interaction.reply('Failed to add role. Check my permissions.');
@@ -272,14 +446,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     const applicantId = getApplicantIdFromChannel(interaction.channel);
     if (!applicantId) {
-      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
+      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor or builder application channel.');
+      return;
+    }
+
+    const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
+    const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
+
+    if (!isActorChannel && !isBuilderChannel) {
+      await interaction.reply('This command can only be used in actor or builder application channels.');
       return;
     }
 
     try {
       const applicantMember = await interaction.guild.members.fetch(applicantId);
       const dmChannel = await applicantMember.createDM();
-      await dmChannel.send('Your application in Island SMP has been rejected. Thank you for your interest!');
+      const roleType = isActorChannel ? 'Actor' : 'Builder';
+      await dmChannel.send(`Your ${roleType} application in Island SMP has been rejected. Thank you for your interest!`);
     } catch (error) {
       console.error('Failed to send DM to applicant:', error);
     }
@@ -326,12 +509,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  if (message.content.trim().toLowerCase() === 'app') {
+  if (message.content.trim().toLowerCase() === 'postappembed') {
     if (message.author.id !== ALLOWED_USER_ID) return;
     await message.delete();
     const embed = new EmbedBuilder()
         .setTitle('Actor Applications')
-        .setDescription('Open a ticket to apply to become an Actor in our series.\n-----------------------------------------------------------')
+        .setDescription('Open a ticket to apply to become an Actor in our series.\n------------------------------------------------')
         .setColor(0x242429)
         .addFields(
             { name:"Requirements", value:"➡️ **Be at least 16 years old.**\n➡️ Have a microphone.\n➡️ Speak fluent english. "}
@@ -344,7 +527,11 @@ client.on(Events.MessageCreate, async (message) => {
       new ButtonBuilder()
         .setCustomId(APPLY_BUTTON_ID)
         .setLabel('Apply for Actor')
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+          .setCustomId(BUILDER_BUTTON_ID)
+          .setLabel('Apply for Builder')
+          .setStyle(ButtonStyle.Secondary),
     );
 
     await message.channel.send({ embeds: [embed], components: [buttonRow] });

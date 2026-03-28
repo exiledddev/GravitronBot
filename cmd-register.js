@@ -21,6 +21,7 @@ const commands = [
       .setDescription('Accept an actor application by providing the applicant\'s username.')
       .toJSON(),
 
+
   new SlashCommandBuilder()
       .setName('reject')
       .setDescription('Reject an actor application by providing the applicant\'s username.')
