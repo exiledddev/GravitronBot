@@ -84,7 +84,7 @@ function getRandomQuestion() {
 }
 
 async function sendChatRevivePing(guild) {
-  const reviveChannel = guild.systemChannel;
+  const reviveChannel = guild.channels.cache.get('1503735347480100877');
   if (!reviveChannel) return;
 
   await reviveChannel.send(
