@@ -14,6 +14,7 @@ const {
   ChatInputBuilder,
   TextInputStyle, roleMention, channelMention, MessageFlagsBitField,
 } = require('discord.js');
+const cron = require('node-cron');
 
 const token = process.env.DISCORD_TOKEN;
 
@@ -32,6 +33,24 @@ const client = new Client({
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
+  cron.schedule(
+    '30 14 * * *',
+    async () => {
+      for (const guild of readyClient.guilds.cache.values()) {
+        const reviveChannel = guild.systemChannel;
+        if (!reviveChannel) continue;
+
+        try {
+          await reviveChannel.send(
+            `${roleMention(CHAT_REVIVE_ROLE_ID)} Chat Revive Time! ${getRandomQuestion()}`,
+          );
+        } catch (error) {
+          console.error(`Failed to send chat revive message in guild ${guild.id}:`, error);
+        }
+      }
+    },
+    { timezone: 'Etc/GMT-3' },
+  );
 });
 
 const APPLY_BUTTON_ID = 'actor_apply_open';
@@ -41,6 +60,33 @@ const BUILDER_MODAL_ID = 'builder_apply_form';
 const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
 const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
+const CHAT_REVIVE_ROLE_ID = '1534150069593444402';
+const CHAT_REVIVE_QUESTIONS = [
+  'How is everybody doing today?',
+  "What is the thing you're looking forward most to today?",
+  'What is your dream car?',
+  "If you'd like to move from your home country, where would you move?",
+  'Who is your favorite YouTuber and why?',
+  'What is your favorite movie of all time and why?',
+  'What is your favorite TV Series of all time and why?',
+  '❄☟☠💧 🕈⚐☼☹👎 ☠💧 ☠⚐❄ 🕈☟✌❄ ☠❄ 💧☜☜💣💧📬',
+  '🕈☟✌❄ ☠💧 ✆☜☹⚐🕈 💧❄✌✡💧 ✆☜☹⚐🕈📬',
+  '⚐☠👍☜ ✆☼⚐❄☟☜☼💧📪 ☠⚐🕈 ☜☠☜💣☠☜💧?',
+  '🕈☟✡ ✌☼☜ ✡⚐🕆 ❄☼✌☠💧☹✌❄☠☠☝ ❄☟☠💧?',
+  '❄☟☜ ✆☜☝☠☠☠☠☠☝ ⚐👉 ❄☟☜ ☜☠👎📬',
+];
+const BOT_PING_SEQUENCE = [
+  '↻ System Check Init...',
+  '✅ Quantum Carburator Operational...',
+  '✅ Microverse Battery Operational...',
+  '✅ Self-Destruction Protocol on Standby...',
+  '✦ All systems operational.',
+  '➲ Gravitron on Standby.',
+];
+
+function getRandomQuestion() {
+  return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+}
 
 function isAuthorized(interaction) {
   return (
@@ -509,6 +555,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
+  if (message.mentions.users.has(client.user.id)) {
+    try {
+      const statusMessage = await message.reply({ content: BOT_PING_SEQUENCE[0] });
+
+      for (let i = 1; i < BOT_PING_SEQUENCE.length; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        await statusMessage.edit(BOT_PING_SEQUENCE[i]);
+      }
+    } catch (error) {
+      console.error('Failed to send bot ping status sequence:', error);
+    }
+    return;
+  }
+
   if (message.content.trim().toLowerCase() === 'postappembed') {
     if (message.author.id !== ALLOWED_USER_ID) return;
     await message.delete();
@@ -561,4 +621,3 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 client.login(token);
-
