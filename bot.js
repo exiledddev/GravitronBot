@@ -37,13 +37,8 @@ client.once(Events.ClientReady, (readyClient) => {
     '30 14 * * *',
     async () => {
       for (const guild of readyClient.guilds.cache.values()) {
-        const reviveChannel = guild.systemChannel;
-        if (!reviveChannel) continue;
-
         try {
-          await reviveChannel.send(
-            `${roleMention(CHAT_REVIVE_ROLE_ID)} Chat Revive Time! ${getRandomQuestion()}`,
-          );
+          await sendChatRevivePing(guild);
         } catch (error) {
           console.error(`Failed to send chat revive message in guild ${guild.id}:`, error);
         }
@@ -86,6 +81,15 @@ const BOT_PING_SEQUENCE = [
 
 function getRandomQuestion() {
   return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+}
+
+async function sendChatRevivePing(guild) {
+  const reviveChannel = guild.systemChannel;
+  if (!reviveChannel) return;
+
+  await reviveChannel.send(
+    `${roleMention(CHAT_REVIVE_ROLE_ID)} Chat Revive Time! ${getRandomQuestion()}`,
+  );
 }
 
 function isAuthorized(interaction) {
@@ -595,6 +599,19 @@ client.on(Events.MessageCreate, async (message) => {
     );
 
     await message.channel.send({ embeds: [embed], components: [buttonRow] });
+  }
+
+  if (message.content.trim().toLowerCase() === '~$init protocol 41') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
+
+    try {
+      await sendChatRevivePing(message.guild);
+      await message.reply('Chat revive ping dispatched.');
+    } catch (error) {
+      console.error('Failed to dispatch manual chat revive ping:', error);
+      await message.reply('Failed to dispatch chat revive ping.');
+    }
+    return;
   }
 
   if (message.content.includes("how") && message.content.includes("apply")) {
