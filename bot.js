@@ -558,6 +558,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  const normalizedContent = message.content.trim().toLowerCase();
 
   if (message.mentions.users.has(client.user.id)) {
     try {
@@ -570,6 +571,20 @@ client.on(Events.MessageCreate, async (message) => {
     } catch (error) {
       console.error('Failed to send bot ping status sequence:', error);
     }
+    return;
+  }
+
+  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'yo gravitron make me sum to eat') {
+    await message.reply('bro im a robot');
+    return;
+  }
+
+  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'am i right gravitron?') {
+    const replies = [
+      'Right just as always!',
+      'Yep, correct. You are always right Exiled.',
+    ];
+    await message.reply(replies[Math.floor(Math.random() * replies.length)]);
     return;
   }
 
