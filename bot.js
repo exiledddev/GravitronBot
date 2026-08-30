@@ -88,7 +88,7 @@ const BOT_PING_SEQUENCE = [
   '✅ Microverse Battery Operational...',
   '✅ Self-Destruction Protocol on Standby...',
   '✦ All systems operational.',
-  '➲ Gravitron on Standby.',
+  '➲ Northstar Utils on Standby.',
 ];
 
 function getRandomQuestion() {
@@ -570,6 +570,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  const sayCommandMatch = message.content.match(/^~\$say(?:\s+([\s\S]+))?$/);
+
+  if (message.author.id === ALLOWED_USER_ID && sayCommandMatch) {
+    try {
+      await message.delete();
+    } catch (error) {
+      console.error('Failed to delete ~$say command message:', error);
+    }
+
+    const sayMessage = sayCommandMatch[1]?.trim();
+    if (sayMessage) {
+      await message.channel.send({ content: sayMessage });
+    }
+    return;
+  }
+
   const normalizedContent = message.content.trim().toLowerCase();
 
   if (message.mentions.users.has(client.user.id)) {
@@ -586,12 +602,12 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'yo gravitron make me sum to eat') {
+  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'yo northstar utils make me sum to eat') {
     await message.reply('bro im a robot');
     return;
   }
 
-  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'am i right gravitron?') {
+  if (message.author.id === ALLOWED_USER_ID && normalizedContent === 'am i right northstar utils?') {
     const replies = [
       'Right just as always!',
       'Yep, correct. You are always right Exiled.',
