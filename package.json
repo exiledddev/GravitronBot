@@ -1,5 +1,5 @@
 {
-  "name": "gravitron-discord-bot",
+  "name": "northstar-utils-discord-bot",
   "version": "1.0.0",
   "description": "Starter Discord.js bot with slash command registration",
   "main": "bot.js",
