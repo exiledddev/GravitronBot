@@ -570,6 +570,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  const sayCommandMatch = message.content.match(/^~\$say(?:\s+([\s\S]+))?$/);
+
+  if (message.author.id === ALLOWED_USER_ID && sayCommandMatch) {
+    try {
+      await message.delete();
+    } catch (error) {
+      console.error('Failed to delete ~$say command message:', error);
+    }
+
+    const sayMessage = sayCommandMatch[1]?.trim();
+    if (sayMessage) {
+      await message.channel.send({ content: sayMessage });
+    }
+    return;
+  }
+
   const normalizedContent = message.content.trim().toLowerCase();
 
   if (message.mentions.users.has(client.user.id)) {
