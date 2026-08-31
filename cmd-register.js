@@ -36,6 +36,11 @@ const commands = [
       .setName('faq')
       .setDescription('Display frequently asked questions.')
       .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('patchnotes')
+      .setDescription('Display the latest Northstar Utils patch notes.')
+      .toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);
@@ -54,4 +59,3 @@ const rest = new REST({ version: '10' }).setToken(token);
     process.exit(1);
   }
 })();
-
