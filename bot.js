@@ -741,7 +741,7 @@ client.on(Events.MessageCreate, async (message) => {
     await message.channel.send({ embeds: [embed], components: [buttonRow] });
   }
 
-  if (message.content.trim().toLowerCase() === '~$init protocol 41') {
+  if (normalizedContent === '~$init protocol 41') {
     if (message.author.id !== ALLOWED_USER_ID) return;
 
     try {
@@ -752,49 +752,50 @@ client.on(Events.MessageCreate, async (message) => {
       await message.reply('Failed to dispatch chat revive ping.');
     }
 
-    if (message.content.trim().toLowerCase() === '~$init antispam') {
-      if (message.author.id !== ALLOWED_USER_ID) return;
+    return;
+  }
 
-      if (!message.inGuild() || !message.guild) {
-        await message.reply('This command can only be used inside a server.');
-        return;
-      }
+  if (normalizedContent === '~$init antispam') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
 
-      const existingTrapChannel = message.guild.channels.cache.find(
-        (channel) =>
-          channel.type === ChannelType.GuildText &&
-          channel.parentId === message.channel.parentId &&
-          isAntiSpamTrapChannel(channel),
-      );
-
-      if (existingTrapChannel) {
-        await message.reply(`An antispam trap channel already exists here: ${existingTrapChannel}`);
-        return;
-      }
-
-      try {
-        const trapChannel = await message.guild.channels.create({
-          name: ANTI_SPAM_CHANNEL_NAME,
-          type: ChannelType.GuildText,
-          parent: message.channel.parentId ?? undefined,
-          topic: ANTI_SPAM_TOPIC,
-          reason: `Antispam trap channel initialized by ${message.author.tag}`,
-        });
-
-        const warningEmbed = new EmbedBuilder()
-          .setTitle('WARNING')
-          .setDescription(
-            'This is a spam/scam bot web channel. It is a trap set for scam bots, and **if you send a message in this channel, you will be automatically banned.**',
-          )
-          .setColor(0xFF0000);
-
-        await trapChannel.send({ embeds: [warningEmbed] });
-        await message.reply(`Antispam trap channel created: ${trapChannel}`);
-      } catch (error) {
-        console.error('Failed to create antispam trap channel:', error);
-        await message.reply('Failed to create antispam trap channel. Check my permissions.');
-      }
+    if (!message.inGuild() || !message.guild) {
+      await message.reply('This command can only be used inside a server.');
       return;
+    }
+
+    const existingTrapChannel = message.guild.channels.cache.find(
+      (channel) =>
+        channel.type === ChannelType.GuildText &&
+        channel.parentId === message.channel.parentId &&
+        isAntiSpamTrapChannel(channel),
+    );
+
+    if (existingTrapChannel) {
+      await message.reply(`An antispam trap channel already exists here: ${existingTrapChannel}`);
+      return;
+    }
+
+    try {
+      const trapChannel = await message.guild.channels.create({
+        name: ANTI_SPAM_CHANNEL_NAME,
+        type: ChannelType.GuildText,
+        parent: message.channel.parentId ?? undefined,
+        topic: ANTI_SPAM_TOPIC,
+        reason: `Antispam trap channel initialized by ${message.author.tag}`,
+      });
+
+      const warningEmbed = new EmbedBuilder()
+        .setTitle('WARNING')
+        .setDescription(
+          'This is a spam/scam bot web channel. It is a trap set for scam bots, and **if you send a message in this channel, you will be automatically banned.**',
+        )
+        .setColor(0xFF0000);
+
+      await trapChannel.send({ embeds: [warningEmbed] });
+      await message.reply(`Antispam trap channel created: ${trapChannel}`);
+    } catch (error) {
+      console.error('Failed to create antispam trap channel:', error);
+      await message.reply('Failed to create antispam trap channel. Check my permissions.');
     }
     return;
   }
