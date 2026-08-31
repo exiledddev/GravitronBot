@@ -33,19 +33,21 @@ const client = new Client({
 
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
-  cron.schedule(
-    '30 14 * * *',
-    async () => {
-      for (const guild of readyClient.guilds.cache.values()) {
-        try {
-          await sendChatRevivePing(guild);
-        } catch (error) {
-          console.error(`Failed to send chat revive message in guild ${guild.id}:`, error);
+  for (const schedule of CHAT_REVIVE_SCHEDULES) {
+    cron.schedule(
+      schedule,
+      async () => {
+        for (const guild of readyClient.guilds.cache.values()) {
+          try {
+            await sendChatRevivePing(guild);
+          } catch (error) {
+            console.error(`Failed to send chat revive message in guild ${guild.id}:`, error);
+          }
         }
-      }
-    },
-    { timezone: 'Etc/GMT-3' },
-  );
+      },
+      { timezone: 'Etc/GMT-3' },
+    );
+  }
 });
 
 const APPLY_BUTTON_ID = 'actor_apply_open';
@@ -55,6 +57,14 @@ const BUILDER_MODAL_ID = 'builder_apply_form';
 const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
 const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
+const ADMIN_ROLE_ID = '1503739527804616836';
+const ACTOR_ROLE_ID = '1503776275645337621';
+const BUILDER_ROLE_ID = '1503778122275885121';
+const ANTI_SPAM_CHANNEL_NAME = 'spam-web';
+const ANTI_SPAM_TOPIC = 'northstar-antispam-trap';
+const ANTI_SPAM_BAN_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+const ANTI_SPAM_DELETE_SECONDS = 7 * 24 * 60 * 60;
+const CHAT_REVIVE_SCHEDULES = ['30 14 * * *', '0 17 * * *', '30 19 * * *', '0 22 * * *'];
 const CHAT_REVIVE_ROLE_ID = '1534150069593444402';
 const CHAT_REVIVE_QUESTIONS = [
   'How is everybody doing today?',
@@ -107,7 +117,15 @@ async function sendChatRevivePing(guild) {
 function isAuthorized(interaction) {
   return (
     interaction.user?.id === ALLOWED_USER_ID ||
-    interaction.memberPermissions?.has('Administrator')
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
+  );
+}
+
+function isAntiSpamTrapChannel(channel) {
+  return (
+    channel?.type === ChannelType.GuildText &&
+    channel.name === ANTI_SPAM_CHANNEL_NAME &&
+    channel.topic === ANTI_SPAM_TOPIC
   );
 }
 
@@ -183,6 +201,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === 'ping') {
       await interaction.reply('Pong!');
+      return;
+    }
+
+    if (interaction.commandName === 'patchnotes') {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to use this command.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const patchnotesEmbed = new EmbedBuilder()
+        .setTitle('Northstar Utils Patch Notes')
+        .setDescription('Latest feature updates for Northstar Utils v1.0.9')
+        .addFields(
+          {
+            name: 'Version',
+            value: 'Northstar Utils v1.0.9',
+          },
+          {
+            name: '/patchnotes command',
+            value: 'Added an admin-only slash command to quickly view the latest update log in-server.',
+          },
+          {
+            name: '/accept role update',
+            value: 'Updated actor and builder acceptance role assignment to the latest role IDs.',
+          },
+          {
+            name: 'Application ticket alert update',
+            value: `New actor/builder tickets now ping ${roleMention(ADMIN_ROLE_ID)} for admin review.`,
+          },
+          {
+            name: '~$init antispam',
+            value: 'Added a restricted setup command for creating a dedicated spam trap channel in the current category.',
+          },
+          {
+            name: 'spam-web auto-ban trap',
+            value: 'Non-admin users who post in spam-web are instantly banned and automatically unbanned after 7 days.',
+          },
+          {
+            name: 'Active Chat revive expansion',
+            value: 'Added new revive pings at 5:00 PM, 7:30 PM, and 10:00 PM GMT+3 in addition to 2:30 PM.',
+          },
+        )
+        .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })
+        .setColor(0x242429);
+
+      await interaction.reply({ embeds: [patchnotesEmbed] });
       return;
     }
   }
@@ -353,7 +420,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           );
 
       await applicationChannel.send(
-            {content:`${roleMention('1475116965457825936')}`, embeds: [appEmbed] }
+            {content:`${roleMention(ADMIN_ROLE_ID)}`, embeds: [appEmbed] }
       );
       await applicationChannel.send(
           {content:`Hey there <@${interaction.user.id}>!\n\nThanks for applying to become an Actor in our series!\n\n` +
@@ -442,7 +509,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setColor(0xFF0000);
 
       await applicationChannel.send(
-          {content:`${roleMention('1475116965457825936')}`, embeds: [appEmbed] }
+          {content:`${roleMention(ADMIN_ROLE_ID)}`, embeds: [appEmbed] }
       );
       await applicationChannel.send(
           {content:`Hey there <@${interaction.user.id}>!\n\nThanks for applying to become a Builder in our series!\n\n` +
@@ -484,7 +551,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const roleId = isActorChannel ? '1475102281753038858' : '1475102345854713977';
+      const roleId = isActorChannel ? ACTOR_ROLE_ID : BUILDER_ROLE_ID;
       const role = interaction.guild.roles.cache.get(roleId);
       
       if (!role) {
@@ -570,6 +637,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+
+  if (isAntiSpamTrapChannel(message.channel)) {
+    if (!message.inGuild() || !message.member) return;
+
+    if (message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return;
+    }
+
+    try {
+      await message.member.ban({
+        reason: 'Triggered antispam trap channel.',
+        deleteMessageSeconds: ANTI_SPAM_DELETE_SECONDS,
+      });
+
+      setTimeout(async () => {
+        try {
+          await message.guild.bans.remove(
+            message.author.id,
+            'Antispam temporary ban expired after 7 days.',
+          );
+        } catch (error) {
+          console.error('Failed to auto-unban antispam trap user:', error);
+        }
+      }, ANTI_SPAM_BAN_DURATION_MS);
+    } catch (error) {
+      console.error('Failed to ban antispam trap user:', error);
+    }
+    return;
+  }
+
   const sayCommandMatch = message.content.match(/^~\$say(?:\s+([\s\S]+))?$/);
 
   if (message.author.id === ALLOWED_USER_ID && sayCommandMatch) {
@@ -653,6 +750,51 @@ client.on(Events.MessageCreate, async (message) => {
     } catch (error) {
       console.error('Failed to dispatch manual chat revive ping:', error);
       await message.reply('Failed to dispatch chat revive ping.');
+    }
+
+    if (message.content.trim().toLowerCase() === '~$init antispam') {
+      if (message.author.id !== ALLOWED_USER_ID) return;
+
+      if (!message.inGuild() || !message.guild) {
+        await message.reply('This command can only be used inside a server.');
+        return;
+      }
+
+      const existingTrapChannel = message.guild.channels.cache.find(
+        (channel) =>
+          channel.type === ChannelType.GuildText &&
+          channel.parentId === message.channel.parentId &&
+          isAntiSpamTrapChannel(channel),
+      );
+
+      if (existingTrapChannel) {
+        await message.reply(`An antispam trap channel already exists here: ${existingTrapChannel}`);
+        return;
+      }
+
+      try {
+        const trapChannel = await message.guild.channels.create({
+          name: ANTI_SPAM_CHANNEL_NAME,
+          type: ChannelType.GuildText,
+          parent: message.channel.parentId ?? undefined,
+          topic: ANTI_SPAM_TOPIC,
+          reason: `Antispam trap channel initialized by ${message.author.tag}`,
+        });
+
+        const warningEmbed = new EmbedBuilder()
+          .setTitle('WARNING')
+          .setDescription(
+            'This is a spam/scam bot web channel. It is a trap set for scam bots, and **if you send a message in this channel, you will be automatically banned.**',
+          )
+          .setColor(0xFF0000);
+
+        await trapChannel.send({ embeds: [warningEmbed] });
+        await message.reply(`Antispam trap channel created: ${trapChannel}`);
+      } catch (error) {
+        console.error('Failed to create antispam trap channel:', error);
+        await message.reply('Failed to create antispam trap channel. Check my permissions.');
+      }
+      return;
     }
     return;
   }
