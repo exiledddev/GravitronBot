@@ -51,11 +51,20 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 const APPLY_BUTTON_ID = 'actor_apply_open';
-const BUILDER_BUTTON_ID = 'builder_apply_open'
+const BUILDER_BUTTON_ID = 'builder_apply_open';
+const STAFF_BUTTON_ID = 'staff_apply_open';
+const TEAM_BUTTON_ID = 'team_apply_open';
+const SUPPORT_BUTTON_ID = 'support_ticket_open';
 const APPLY_MODAL_ID = 'actor_apply_form';
 const BUILDER_MODAL_ID = 'builder_apply_form';
+const STAFF_MODAL_ID = 'staff_apply_form';
+const TEAM_MODAL_ID = 'team_apply_form';
+const SUPPORT_MODAL_ID = 'support_ticket_form';
 const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
 const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
+const STAFF_TOPIC_PREFIX = 'staff-app:user:';
+const TEAM_TOPIC_PREFIX = 'team-app:user:';
+const SUPPORT_TOPIC_PREFIX = 'support-ticket:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
 const ADMIN_ROLE_ID = '1503739527804616836';
 const ACTOR_ROLE_ID = '1503776275645337621';
@@ -167,6 +176,48 @@ function getUniqueBuilderChannelName(guild, usernamePart) {
   return candidate;
 }
 
+function getUniqueStaffChannelName(guild, usernamePart) {
+  const base = `🛡staff-${usernamePart}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function getUniqueTeamChannelName(guild, usernamePart) {
+  const base = `💼team-${usernamePart}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function getUniqueSupportChannelName(guild, usernamePart) {
+  const base = `🆘support-${usernamePart}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
 function findExistingActorApplicationChannel(guild, userId) {
   const marker = `${ACTOR_TOPIC_PREFIX}${userId}`;
 
@@ -189,9 +240,53 @@ function findExistingBuilderApplicationChannel(guild, userId) {
   );
 }
 
+function findExistingStaffApplicationChannel(guild, userId) {
+  const marker = `${STAFF_TOPIC_PREFIX}${userId}`;
+
+  return guild.channels.cache.find(
+      (channel) =>
+        channel.type === ChannelType.GuildText &&
+        typeof channel.topic === 'string' &&
+        channel.topic.startsWith(marker),
+  );
+}
+
+function findExistingTeamApplicationChannel(guild, userId) {
+  const marker = `${TEAM_TOPIC_PREFIX}${userId}`;
+
+  return guild.channels.cache.find(
+      (channel) =>
+        channel.type === ChannelType.GuildText &&
+        typeof channel.topic === 'string' &&
+        channel.topic.startsWith(marker),
+  );
+}
+
+function findExistingSupportTicketChannel(guild, userId) {
+  const marker = `${SUPPORT_TOPIC_PREFIX}${userId}`;
+
+  return guild.channels.cache.find(
+      (channel) =>
+        channel.type === ChannelType.GuildText &&
+        typeof channel.topic === 'string' &&
+        channel.topic.startsWith(marker),
+  );
+}
+
 function getApplicantIdFromChannel(channel) {
   const channelTopic = channel?.topic || '';
-  const topicMatch = channelTopic.match(new RegExp(`^${ACTOR_TOPIC_PREFIX}(\\d+)`)) || channelTopic.match(new RegExp(`^${BUILDER_TOPIC_PREFIX}(\\d+)`));
+  const topicPrefixes = [
+    ACTOR_TOPIC_PREFIX,
+    BUILDER_TOPIC_PREFIX,
+    STAFF_TOPIC_PREFIX,
+    TEAM_TOPIC_PREFIX,
+    SUPPORT_TOPIC_PREFIX,
+  ];
+  let topicMatch = null;
+  for (const prefix of topicPrefixes) {
+    topicMatch = channelTopic.match(new RegExp(`^${prefix}(\\d+)`));
+    if (topicMatch) break;
+  }
 
   return topicMatch ? topicMatch[1] : null;
 }
@@ -215,35 +310,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription('Latest feature updates for Northstar Utils v1.0.9')
+        .setDescription('Latest feature updates for Northstar Utils v1.1.0')
         .addFields(
           {
             name: 'Version',
-            value: 'Northstar Utils v1.0.9',
+            value: 'Northstar Utils v1.1.0',
           },
           {
-            name: '/patchnotes command',
-            value: 'Added an admin-only slash command to quickly view the latest update log in-server.',
+            name: 'Staff + Team application triggers',
+            value: 'Added a new restricted trigger to post both Staff and Team application embeds with dedicated ticket buttons.',
           },
           {
-            name: '/accept role update',
-            value: 'Updated actor and builder acceptance role assignment to the latest role IDs.',
+            name: 'Support ticket trigger',
+            value: 'Added a dedicated restricted trigger to post the Support ticket embed with its own ticket button.',
           },
           {
-            name: 'Application ticket alert update',
-            value: `New actor/builder tickets now ping ${roleMention(ADMIN_ROLE_ID)} for admin review.`,
+            name: 'New ticket forms and prompts',
+            value: 'Implemented Staff/Team/Support modal forms and automatic follow-up applicant prompts inside created channels.',
           },
           {
-            name: '~$init antispam',
-            value: 'Added a restricted setup command for creating a dedicated spam trap channel in the current category.',
+            name: '/close ticket coverage',
+            value: 'Extended close-ticket support for Staff, Team, and Support ticket channels while keeping manual assignment workflows.',
           },
           {
-            name: 'spam-web auto-ban trap',
-            value: 'Non-admin users who post in spam-web are instantly banned and automatically unbanned after 7 days.',
-          },
-          {
-            name: 'Active Chat revive expansion',
-            value: 'Added new revive pings at 5:00 PM, 7:30 PM, and 10:00 PM GMT+3 in addition to 2:30 PM.',
+            name: 'Trigger access policy',
+            value: `All new ticket embed triggers are restricted to <@${ALLOWED_USER_ID}> only.`,
           },
         )
         .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })
@@ -338,6 +429,130 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new ActionRowBuilder().addComponents(ageInput),
         new ActionRowBuilder().addComponents(lengthInput),
         new ActionRowBuilder().addComponents(expInput),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === STAFF_BUTTON_ID) {
+    const modal = new ModalBuilder()
+        .setCustomId(STAFF_MODAL_ID)
+        .setTitle('Staff Application');
+
+    const nameInput = new TextInputBuilder()
+        .setCustomId('applicant_name')
+        .setLabel('What is your name?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(50);
+
+    const ageInput = new TextInputBuilder()
+        .setCustomId('applicant_age')
+        .setLabel('How old are you?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(2);
+
+    const reasonInput = new TextInputBuilder()
+        .setCustomId('applicant_reason')
+        .setLabel('Why do you want to become staff?')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    const expInput = new TextInputBuilder()
+        .setCustomId('applicant_exp')
+        .setLabel('Experience')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(ageInput),
+        new ActionRowBuilder().addComponents(reasonInput),
+        new ActionRowBuilder().addComponents(expInput),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === TEAM_BUTTON_ID) {
+    const modal = new ModalBuilder()
+        .setCustomId(TEAM_MODAL_ID)
+        .setTitle('Team Application');
+
+    const nameInput = new TextInputBuilder()
+        .setCustomId('applicant_name')
+        .setLabel('What is your name?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(50);
+
+    const ageInput = new TextInputBuilder()
+        .setCustomId('applicant_age')
+        .setLabel('How old are you?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(2);
+
+    const positionInput = new TextInputBuilder()
+        .setCustomId('applicant_position')
+        .setLabel('Position (Developer/Scriptwriter/etc.)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(100);
+
+    const reasonInput = new TextInputBuilder()
+        .setCustomId('applicant_reason')
+        .setLabel('Why do you want to join Northstar Entertainment?')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    const expInput = new TextInputBuilder()
+        .setCustomId('applicant_exp')
+        .setLabel('Experience')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(ageInput),
+        new ActionRowBuilder().addComponents(positionInput),
+        new ActionRowBuilder().addComponents(reasonInput),
+        new ActionRowBuilder().addComponents(expInput),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === SUPPORT_BUTTON_ID) {
+    const modal = new ModalBuilder()
+        .setCustomId(SUPPORT_MODAL_ID)
+        .setTitle('Support Ticket');
+
+    const nameInput = new TextInputBuilder()
+        .setCustomId('applicant_name')
+        .setLabel('What is your name?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(50);
+
+    const subjectInput = new TextInputBuilder()
+        .setCustomId('ticket_subject')
+        .setLabel('What is the subject of your issue?')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(500);
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(subjectInput),
     );
 
     await interaction.showModal(modal);
@@ -531,6 +746,256 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
   }
+
+  if (interaction.isModalSubmit() && interaction.customId === STAFF_MODAL_ID) {
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        ephemeral: true,
+        content: 'This form can only be submitted inside a server.',
+      });
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('applicant_name').trim();
+    const age = interaction.fields.getTextInputValue('applicant_age').trim();
+    const reason = interaction.fields.getTextInputValue('applicant_reason').trim();
+    const exp = interaction.fields.getTextInputValue('applicant_exp').trim();
+
+    const existingChannel = findExistingStaffApplicationChannel(interaction.guild, interaction.user.id);
+    if (existingChannel) {
+      await interaction.reply({
+        ephemeral: true,
+        content: `You already have an open staff application channel: ${existingChannel}`,
+      });
+      return;
+    }
+
+    const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
+    const channelName = getUniqueStaffChannelName(interaction.guild, usernamePart);
+
+    try {
+      const applicationChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        topic: `${STAFF_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
+        reason: `Staff application submitted by ${interaction.user.tag}`,
+      });
+
+      const appEmbed = new EmbedBuilder()
+          .setTitle('Staff Application')
+          .setDescription(`Application submitted by <@${interaction.user.id}>`)
+          .addFields(
+              { name: 'Name', value: `${name}` },
+              { name: 'Age', value: `${age}` },
+              { name: 'Reason', value: `${reason}` },
+              { name: 'Experience', value: `${exp}` },
+          )
+          .setFooter(
+              { text: 'Please do not ping anyone until we review your application.' },
+          )
+          .setColor(0xFF0000);
+
+      await applicationChannel.send(
+          { content: `${roleMention(ADMIN_ROLE_ID)}`, embeds: [appEmbed] },
+      );
+      await applicationChannel.send(
+          { content: `<@${interaction.user.id}> Please tell us about yourself` },
+      );
+
+      await interaction.reply({
+        ephemeral: true,
+        content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
+      });
+    } catch (error) {
+      console.error('Failed to create staff application channel:', error);
+      await interaction.reply({
+        ephemeral: true,
+        content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
+      });
+    }
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === TEAM_MODAL_ID) {
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        ephemeral: true,
+        content: 'This form can only be submitted inside a server.',
+      });
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('applicant_name').trim();
+    const age = interaction.fields.getTextInputValue('applicant_age').trim();
+    const position = interaction.fields.getTextInputValue('applicant_position').trim();
+    const reason = interaction.fields.getTextInputValue('applicant_reason').trim();
+    const exp = interaction.fields.getTextInputValue('applicant_exp').trim();
+
+    const existingChannel = findExistingTeamApplicationChannel(interaction.guild, interaction.user.id);
+    if (existingChannel) {
+      await interaction.reply({
+        ephemeral: true,
+        content: `You already have an open team application channel: ${existingChannel}`,
+      });
+      return;
+    }
+
+    const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
+    const channelName = getUniqueTeamChannelName(interaction.guild, usernamePart);
+
+    try {
+      const applicationChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        topic: `${TEAM_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
+        reason: `Team application submitted by ${interaction.user.tag}`,
+      });
+
+      const appEmbed = new EmbedBuilder()
+          .setTitle('Team Application')
+          .setDescription(`Application submitted by <@${interaction.user.id}>`)
+          .addFields(
+              { name: 'Name', value: `${name}` },
+              { name: 'Age', value: `${age}` },
+              { name: 'Position', value: `${position}` },
+              { name: 'Reason', value: `${reason}` },
+              { name: 'Experience', value: `${exp}` },
+          )
+          .setFooter(
+              { text: 'Please do not ping anyone until we review your application.' },
+          )
+          .setColor(0xFF0000);
+
+      await applicationChannel.send(
+          { content: `${roleMention(ADMIN_ROLE_ID)}`, embeds: [appEmbed] },
+      );
+      await applicationChannel.send(
+          { content: `<@${interaction.user.id}> Please describe what makes you better than other candidates and elaborate on your experience in the domain you are applying for` },
+      );
+
+      await interaction.reply({
+        ephemeral: true,
+        content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
+      });
+    } catch (error) {
+      console.error('Failed to create team application channel:', error);
+      await interaction.reply({
+        ephemeral: true,
+        content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
+      });
+    }
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === SUPPORT_MODAL_ID) {
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        ephemeral: true,
+        content: 'This form can only be submitted inside a server.',
+      });
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('applicant_name').trim();
+    const subject = interaction.fields.getTextInputValue('ticket_subject').trim();
+
+    const existingChannel = findExistingSupportTicketChannel(interaction.guild, interaction.user.id);
+    if (existingChannel) {
+      await interaction.reply({
+        ephemeral: true,
+        content: `You already have an open support ticket channel: ${existingChannel}`,
+      });
+      return;
+    }
+
+    const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
+    const channelName = getUniqueSupportChannelName(interaction.guild, usernamePart);
+
+    try {
+      const ticketChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        topic: `${SUPPORT_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
+        reason: `Support ticket submitted by ${interaction.user.tag}`,
+      });
+
+      const supportEmbed = new EmbedBuilder()
+          .setTitle('Support Ticket')
+          .setDescription(`Ticket submitted by <@${interaction.user.id}>`)
+          .addFields(
+              { name: 'Name', value: `${name}` },
+              { name: 'Subject', value: `${subject}` },
+          )
+          .setFooter(
+              { text: 'Please do not ping anyone until we review your ticket.' },
+          )
+          .setColor(0xFF0000);
+
+      await ticketChannel.send(
+          { content: `${roleMention(ADMIN_ROLE_ID)}`, embeds: [supportEmbed] },
+      );
+      await ticketChannel.send(
+          { content: `<@${interaction.user.id}> Please describe your issue - DO NOT PING THE ADMINS - they will handle your ticket as soon as they are available` },
+      );
+
+      await interaction.reply({
+        ephemeral: true,
+        content: `Thanks, ${name}! I created ${ticketChannel} for your support ticket.`,
+      });
+    } catch (error) {
+      console.error('Failed to create support ticket channel:', error);
+      await interaction.reply({
+        ephemeral: true,
+        content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
+      });
+    }
+  }
   if(interaction.isChatInputCommand() && interaction.commandName === 'accept') {
     if (!isAuthorized(interaction)) {
       return;
@@ -604,7 +1069,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     const applicantId = getApplicantIdFromChannel(interaction.channel);
     if (!applicantId) {
-      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor application channel.');
+      await interaction.reply('Could not find applicant ID. Make sure this command is run in an application or support ticket channel.');
       return;
     }
     try {
@@ -739,6 +1204,62 @@ client.on(Events.MessageCreate, async (message) => {
     );
 
     await message.channel.send({ embeds: [embed], components: [buttonRow] });
+  }
+
+  if (normalizedContent === 'poststaffteamembed') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
+    await message.delete();
+
+    const staffEmbed = new EmbedBuilder()
+        .setTitle('Staff Applications')
+        .setDescription('Become a staff member within the Island Realm community and help out with moderation.\n------------------------------------------------')
+        .setColor(0x242429)
+        .setFooter({ text: 'Click on the button below to begin your staff application!' });
+
+    const teamEmbed = new EmbedBuilder()
+        .setTitle('Team Applications')
+        .setDescription('Apply to be a Developer / Scriptwriter / Composer / Marketing Agent / Event Manager.\n------------------------------------------------')
+        .setColor(0x242429)
+        .setFooter({ text: 'Click on the button below to begin your team application!' });
+
+    const staffButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(STAFF_BUTTON_ID)
+            .setLabel('Apply for Staff')
+            .setStyle(ButtonStyle.Primary),
+    );
+
+    const teamButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(TEAM_BUTTON_ID)
+            .setLabel('Apply for Team')
+            .setStyle(ButtonStyle.Secondary),
+    );
+
+    await message.channel.send({ embeds: [staffEmbed], components: [staffButtonRow] });
+    await message.channel.send({ embeds: [teamEmbed], components: [teamButtonRow] });
+    return;
+  }
+
+  if (normalizedContent === 'postsupportembed') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
+    await message.delete();
+
+    const supportEmbed = new EmbedBuilder()
+        .setTitle('Support Tickets')
+        .setDescription('Open a support ticket if you need help from the team.\n------------------------------------------------')
+        .setColor(0x242429)
+        .setFooter({ text: 'Click on the button below to open a support ticket!' });
+
+    const supportButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(SUPPORT_BUTTON_ID)
+            .setLabel('Open Support Ticket')
+            .setStyle(ButtonStyle.Danger),
+    );
+
+    await message.channel.send({ embeds: [supportEmbed], components: [supportButtonRow] });
+    return;
   }
 
   if (normalizedContent === '~$init protocol 41') {
