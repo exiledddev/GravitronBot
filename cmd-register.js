@@ -41,6 +41,11 @@ const commands = [
       .setName('patchnotes')
       .setDescription('Display the latest Northstar Utils patch notes.')
       .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('membercount')
+      .setDescription('Show total members and recent joins in the last 24 hours.')
+      .toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);

@@ -26,6 +26,7 @@ if (!token) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -101,6 +102,8 @@ const CHAT_REVIVE_QUESTIONS = [
   '🕈☟✡ ✌☼☜ ✡⚐🕆 ❄☼✌☠💧☹✌❄☠☠☝ ❄☟☠💧?',
   '❄☟☜ ✆☜☝☠☠☠☠☠☝ ⚐👉 ❄☟☜ ☜☠👎📬',
 ];
+const WELCOME_CHANNEL_ID = '1503766761642791014';
+const WELCOME_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1484895910499586069/1544300979577425960/POWER_fr.png?ex=6a9801dd&is=6a96b05d&hm=fb682156ea1b406e0e97096a774c0bcb56ae133d83a4ba206733f7a87ad0e583&';
 const BOT_PING_SEQUENCE = [
   '↻ System Check Init...',
   '✅ Quantum Carburator Operational...',
@@ -112,6 +115,50 @@ const BOT_PING_SEQUENCE = [
 
 function getRandomQuestion() {
   return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+}
+
+function buildWelcomeEmbed(user) {
+  return new EmbedBuilder()
+    .setTitle(`Hello ${user.tag}! Welcome to __Island Realm__!`)
+    .setDescription('Here is some help to get you started:')
+    .addFields(
+      {
+        name: 'Information regarding our server (please read)',
+        value: 'https://discord.com/channels/1503735346817532024/1506390449516974280',
+      },
+      {
+        name: 'Apply for our series',
+        value: 'https://discord.com/channels/1503735346817532024/1507777195190517811',
+      },
+      {
+        name: 'Selectable roles',
+        value: 'https://discord.com/channels/1503735346817532024/1534150990381584474',
+      },
+      {
+        name: '───────────────',
+        value: '\u200b',
+      },
+      {
+        name: 'Quick description of them',
+        value: 'By joining the Island Realm, you automatically agree to the following:',
+      },
+      {
+        name: 'Our rules',
+        value: 'https://discord.com/channels/1503735346817532024/1503741088253349908',
+      },
+      {
+        name: 'Terms of Service',
+        value: '[Read here](https://www.northstarmedia.cc/terms)',
+      },
+      {
+        name: 'Privacy Policy',
+        value: '[Read here](https://www.northstarmedia.cc/privacy)',
+      },
+    )
+    .setFooter({ text: 'Need help? Open a ticket: https://discord.com/channels/1503735346817532024/1544102274941591622' })
+    .setThumbnail(user.displayAvatarURL({ extension: 'png', size: 1024 }))
+    .setImage(WELCOME_IMAGE_URL)
+    .setColor(0x242429);
 }
 
 async function sendChatRevivePing(guild) {
@@ -310,37 +357,63 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription('Latest feature updates for Northstar Utils v1.1.0')
+        .setDescription('Latest feature updates for Northstar Utils v1.1.1')
         .addFields(
           {
             name: 'Version',
-            value: 'Northstar Utils v1.1.0',
+            value: 'Northstar Utils v1.1.1',
           },
           {
-            name: 'Staff + Team application triggers',
-            value: 'Added a new restricted trigger to post both Staff and Team application embeds with dedicated ticket buttons.',
+            name: '/membercount command',
+            value: 'Added a slash command that shows the total server member count and how many members joined in the past 24 hours.',
           },
           {
-            name: 'Support ticket trigger',
-            value: 'Added a dedicated restricted trigger to post the Support ticket embed with its own ticket button.',
+            name: 'Team application form fix',
+            value: 'Fixed the Team application modal by shortening an over-limit label that caused interactions to fail.',
           },
           {
-            name: 'New ticket forms and prompts',
-            value: 'Implemented Staff/Team/Support modal forms and automatic follow-up applicant prompts inside created channels.',
+            name: 'Automatic join welcome flow',
+            value: 'New members now trigger an automatic welcome message in the configured channel and receive a welcome DM embed.',
           },
           {
-            name: '/close ticket coverage',
-            value: 'Extended close-ticket support for Staff, Team, and Support ticket channels while keeping manual assignment workflows.',
-          },
-          {
-            name: 'Trigger access policy',
-            value: `All new ticket embed triggers are restricted to <@${ALLOWED_USER_ID}> only.`,
+            name: '~$sendwelcome trigger',
+            value: `Added a restricted \`~$sendwelcome\` trigger for <@${ALLOWED_USER_ID}> to manually post the welcome embed in any channel.`,
           },
         )
         .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })
         .setColor(0x242429);
 
       await interaction.reply({ embeds: [patchnotesEmbed] });
+      return;
+    }
+
+    if (interaction.commandName === 'membercount') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const totalMembers = interaction.guild.memberCount;
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+      try {
+        const members = await interaction.guild.members.fetch();
+        const joinedInPast24Hours = members.filter(
+          (member) => !member.user.bot && member.joinedTimestamp && member.joinedTimestamp >= cutoff,
+        ).size;
+
+        await interaction.reply(
+          `Total member count: **${totalMembers}**\nJoined in the past 24 hours: **${joinedInPast24Hours}**`,
+        );
+      } catch (error) {
+        console.error('Failed to fetch guild members for /membercount:', error);
+        await interaction.reply(
+          `Total member count: **${totalMembers}**\nJoined in the past 24 hours: **Unavailable**`,
+        );
+      }
       return;
     }
   }
@@ -507,7 +580,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const reasonInput = new TextInputBuilder()
         .setCustomId('applicant_reason')
-        .setLabel('Why do you want to join Northstar Entertainment?')
+        .setLabel('Why do you want to join Northstar?')
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
         .setMaxLength(500);
@@ -1100,6 +1173,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+client.on(Events.GuildMemberAdd, async (member) => {
+  const welcomeMessage = `Hello ${member}! Welcome to the **Island Realm**! Please check your DMs for information regarding our server/series & how to join!`;
+  const welcomeEmbed = buildWelcomeEmbed(member.user);
+
+  const welcomeChannel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
+  if (welcomeChannel?.isTextBased()) {
+    try {
+      await welcomeChannel.send({ content: welcomeMessage });
+    } catch (error) {
+      console.error('Failed to send welcome message in channel:', error);
+    }
+  }
+
+  try {
+    await member.send({ embeds: [welcomeEmbed] });
+  } catch (error) {
+    console.error('Failed to send welcome DM to new member:', error);
+  }
+});
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
@@ -1149,6 +1242,13 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   const normalizedContent = message.content.trim().toLowerCase();
+
+  if (message.author.id === ALLOWED_USER_ID && normalizedContent === '~$sendwelcome') {
+    const targetUser = message.mentions.users.first() ?? message.author;
+    const welcomeEmbed = buildWelcomeEmbed(targetUser);
+    await message.channel.send({ embeds: [welcomeEmbed] });
+    return;
+  }
 
   if (message.mentions.users.has(client.user.id)) {
     try {
