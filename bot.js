@@ -26,15 +26,9 @@ if (!token) {
 const intents = [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMessages,
+  GatewayIntentBits.GuildMembers,
+  GatewayIntentBits.MessageContent,
 ];
-
-if (process.env.ENABLE_GUILD_MEMBERS_INTENT === 'true') {
-  intents.push(GatewayIntentBits.GuildMembers);
-}
-
-if (process.env.ENABLE_MESSAGE_CONTENT_INTENT === 'true') {
-  intents.push(GatewayIntentBits.MessageContent);
-}
 
 const client = new Client({
   intents,
@@ -404,6 +398,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      await interaction.deferReply();
+
       const totalMembers = interaction.guild.memberCount;
       const cutoff = Date.now() - 24 * 60 * 60 * 1000;
 
@@ -413,12 +409,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (member) => !member.user.bot && member.joinedTimestamp && member.joinedTimestamp >= cutoff,
         ).size;
 
-        await interaction.reply(
+        await interaction.editReply(
           `Total member count: **${totalMembers}**\nJoined in the past 24 hours: **${joinedInPast24Hours}**`,
         );
       } catch (error) {
         console.error('Failed to fetch guild members for /membercount:', error);
-        await interaction.reply(
+        await interaction.editReply(
           `Total member count: **${totalMembers}**\nJoined in the past 24 hours: **Unavailable**`,
         );
       }
