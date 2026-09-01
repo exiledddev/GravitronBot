@@ -12,7 +12,7 @@ const {
   PermissionFlagsBits,
   TextInputBuilder,
   ChatInputBuilder,
-  TextInputStyle, roleMention, channelMention, MessageFlagsBitField,
+  TextInputStyle, roleMention, channelMention, MessageFlags,
 } = require('discord.js');
 const cron = require('node-cron');
 
@@ -23,13 +23,21 @@ if (!token) {
   process.exit(1);
 }
 
+const intents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+];
+
+if (process.env.ENABLE_GUILD_MEMBERS_INTENT === 'true') {
+  intents.push(GatewayIntentBits.GuildMembers);
+}
+
+if (process.env.ENABLE_MESSAGE_CONTENT_INTENT === 'true') {
+  intents.push(GatewayIntentBits.MessageContent);
+}
+
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+  intents,
 });
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -350,7 +358,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
         await interaction.reply({
           content: 'You need administrator permissions to use this command.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -391,7 +399,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!interaction.inGuild() || !interaction.guild) {
         await interaction.reply({
           content: 'This command can only be used inside a server.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -635,7 +643,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === APPLY_MODAL_ID) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'This form can only be submitted inside a server.',
       });
       return;
@@ -649,7 +657,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const existingChannel = findExistingActorApplicationChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `You already have an open actor application channel: ${existingChannel}`,
       });
       return;
@@ -719,13 +727,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // )
 
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
       });
     } catch (error) {
       console.error('Failed to create actor application channel:', error);
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
       });
     }
@@ -735,7 +743,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === BUILDER_MODAL_ID) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'This form can only be submitted inside a server.',
       });
       return;
@@ -749,7 +757,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const existingChannel = findExistingBuilderApplicationChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `You already have an open actor application channel: ${existingChannel}`,
       });
       return;
@@ -808,13 +816,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // )
 
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
       });
     } catch (error) {
       console.error('Failed to create builder application channel:', error);
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
       });
     }
@@ -823,7 +831,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === STAFF_MODAL_ID) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'This form can only be submitted inside a server.',
       });
       return;
@@ -837,7 +845,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const existingChannel = findExistingStaffApplicationChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `You already have an open staff application channel: ${existingChannel}`,
       });
       return;
@@ -892,13 +900,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
       });
     } catch (error) {
       console.error('Failed to create staff application channel:', error);
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
       });
     }
@@ -907,7 +915,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === TEAM_MODAL_ID) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'This form can only be submitted inside a server.',
       });
       return;
@@ -922,7 +930,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const existingChannel = findExistingTeamApplicationChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `You already have an open team application channel: ${existingChannel}`,
       });
       return;
@@ -978,13 +986,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `Thanks for applying, ${name}! I created ${applicationChannel} for your application.`,
       });
     } catch (error) {
       console.error('Failed to create team application channel:', error);
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
       });
     }
@@ -993,7 +1001,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === SUPPORT_MODAL_ID) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'This form can only be submitted inside a server.',
       });
       return;
@@ -1005,7 +1013,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const existingChannel = findExistingSupportTicketChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `You already have an open support ticket channel: ${existingChannel}`,
       });
       return;
@@ -1058,13 +1066,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: `Thanks, ${name}! I created ${ticketChannel} for your support ticket.`,
       });
     } catch (error) {
       console.error('Failed to create support ticket channel:', error);
       await interaction.reply({
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
       });
     }
@@ -1169,7 +1177,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         )
         .setColor(0x242429);
 
-    await interaction.reply({ embeds: [embed], ephemeral:true});
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral});
   }
 });
 
