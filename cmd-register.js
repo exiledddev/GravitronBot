@@ -46,6 +46,11 @@ const commands = [
       .setName('membercount')
       .setDescription('Show total members and recent joins in the last 24 hours.')
       .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('ticketstats')
+      .setDescription('Show open Northstar Utils ticket counts by type.')
+      .toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);
