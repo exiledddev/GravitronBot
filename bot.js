@@ -357,31 +357,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription('Latest feature updates for Northstar Utils v1.1.0')
+        .setDescription('Latest feature updates for Northstar Utils v1.1.1')
         .addFields(
           {
             name: 'Version',
-            value: 'Northstar Utils v1.1.0',
+            value: 'Northstar Utils v1.1.1',
           },
           {
-            name: 'Staff + Team application triggers',
-            value: 'Added a new restricted trigger to post both Staff and Team application embeds with dedicated ticket buttons.',
+            name: '/membercount command',
+            value: 'Added a slash command that shows the total server member count and how many members joined in the past 24 hours.',
           },
           {
-            name: 'Support ticket trigger',
-            value: 'Added a dedicated restricted trigger to post the Support ticket embed with its own ticket button.',
+            name: 'Team application form fix',
+            value: 'Fixed the Team application modal by shortening an over-limit label that caused interactions to fail.',
           },
           {
-            name: 'New ticket forms and prompts',
-            value: 'Implemented Staff/Team/Support modal forms and automatic follow-up applicant prompts inside created channels.',
+            name: 'Automatic join welcome flow',
+            value: 'New members now trigger an automatic welcome message in the configured channel and receive a welcome DM embed.',
           },
           {
-            name: '/close ticket coverage',
-            value: 'Extended close-ticket support for Staff, Team, and Support ticket channels while keeping manual assignment workflows.',
-          },
-          {
-            name: 'Trigger access policy',
-            value: `All new ticket embed triggers are restricted to <@${ALLOWED_USER_ID}> only.`,
+            name: '~$sendwelcome trigger',
+            value: `Added a restricted \`~$sendwelcome\` trigger for <@${ALLOWED_USER_ID}> to manually post the welcome embed in any channel.`,
           },
         )
         .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })

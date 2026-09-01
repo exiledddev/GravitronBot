@@ -1,6 +1,6 @@
 {
   "name": "northstar-utils-discord-bot",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "Starter Discord.js bot with slash command registration",
   "main": "bot.js",
   "scripts": {
