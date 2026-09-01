@@ -68,6 +68,13 @@ const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const STAFF_TOPIC_PREFIX = 'staff-app:user:';
 const TEAM_TOPIC_PREFIX = 'team-app:user:';
 const SUPPORT_TOPIC_PREFIX = 'support-ticket:user:';
+const TICKET_STATS_TYPES = [
+  { key: 'actor', label: 'Actor', topicPrefix: ACTOR_TOPIC_PREFIX },
+  { key: 'builder', label: 'Builder', topicPrefix: BUILDER_TOPIC_PREFIX },
+  { key: 'staff', label: 'Staff', topicPrefix: STAFF_TOPIC_PREFIX },
+  { key: 'team', label: 'Team', topicPrefix: TEAM_TOPIC_PREFIX },
+  { key: 'support', label: 'Support', topicPrefix: SUPPORT_TOPIC_PREFIX },
+];
 const ALLOWED_USER_ID = '1273910593539014680';
 const ADMIN_ROLE_ID = '1503739527804616836';
 const ACTOR_ROLE_ID = '1503776275645337621';
@@ -322,6 +329,28 @@ function findExistingSupportTicketChannel(guild, userId) {
   );
 }
 
+function getOpenTicketStats(guild) {
+  const counts = Object.fromEntries(TICKET_STATS_TYPES.map((type) => [type.key, 0]));
+
+  for (const channel of guild.channels.cache.values()) {
+    if (
+      channel.type !== ChannelType.GuildText ||
+      typeof channel.topic !== 'string' ||
+      !channel.topic.includes(':status:open')
+    ) {
+      continue;
+    }
+
+    const matchingType = TICKET_STATS_TYPES.find((type) => channel.topic.startsWith(type.topicPrefix));
+    if (matchingType) {
+      counts[matchingType.key] += 1;
+    }
+  }
+
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  return { counts, total };
+}
+
 function getApplicantIdFromChannel(channel) {
   const channelTopic = channel?.topic || '';
   const topicPrefixes = [
@@ -418,6 +447,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `Total member count: **${totalMembers}**\nJoined in the past 24 hours: **Unavailable**`,
         );
       }
+      return;
+    }
+
+    if (interaction.commandName === 'ticketstats') {
+      if (!isAuthorized(interaction)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to use this command.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const { counts, total } = getOpenTicketStats(interaction.guild);
+      const ticketStatsEmbed = new EmbedBuilder()
+        .setTitle('Northstar Utils Ticket Statistics')
+        .setDescription('Current open tickets by type')
+        .addFields(
+          ...TICKET_STATS_TYPES.map((type) => ({
+            name: `${type.label} Tickets`,
+            value: `${counts[type.key]}`,
+            inline: true,
+          })),
+          {
+            name: 'Total Open Tickets',
+            value: `${total}`,
+            inline: false,
+          },
+        )
+        .setColor(0x242429);
+
+      await interaction.reply({ embeds: [ticketStatsEmbed] });
       return;
     }
   }
