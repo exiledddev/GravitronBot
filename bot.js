@@ -15,13 +15,40 @@ const {
   TextInputStyle, roleMention, channelMention, MessageFlags,
 } = require('discord.js');
 const cron = require('node-cron');
+const { version: BOT_VERSION } = require('./package.json');
 
 const token = process.env.DISCORD_TOKEN;
+const MAX_RECENT_CONSOLE_ERRORS = 5;
+const recentConsoleErrors = [];
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in .env file.');
   process.exit(1);
 }
+
+const originalConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  const formatted = args.map((arg) => {
+    if (arg instanceof Error) {
+      return arg.stack || arg.message;
+    }
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    try {
+      return JSON.stringify(arg);
+    } catch (error) {
+      return String(arg);
+    }
+  }).join(' ');
+
+  recentConsoleErrors.push(`[${new Date().toISOString()}] ${formatted}`);
+  if (recentConsoleErrors.length > MAX_RECENT_CONSOLE_ERRORS) {
+    recentConsoleErrors.shift();
+  }
+
+  originalConsoleError(...args);
+};
 
 const intents = [
   GatewayIntentBits.Guilds,
@@ -85,6 +112,7 @@ const ANTI_SPAM_BAN_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTI_SPAM_DELETE_SECONDS = 7 * 24 * 60 * 60;
 const CHAT_REVIVE_SCHEDULES = ['30 14 * * *', '0 17 * * *', '30 19 * * *', '0 22 * * *'];
 const CHAT_REVIVE_ROLE_ID = '1534150069593444402';
+const BAN_REPORT_CHANNEL_ID = '1503741088253349911';
 const CHAT_REVIVE_QUESTIONS = [
   'How is everybody doing today?',
   "What is the thing you're looking forward most to today?",
@@ -121,9 +149,25 @@ const BOT_PING_SEQUENCE = [
   '✦ All systems operational.',
   '➲ Northstar Utils on Standby.',
 ];
+const BAN_DURATION_OPTIONS = {
+  '1d': { label: '1 day', ms: 24 * 60 * 60 * 1000 },
+  '2d': { label: '2 days', ms: 2 * 24 * 60 * 60 * 1000 },
+  '7d': { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+  permanent: { label: 'Permanently', ms: null },
+};
 
 function getRandomQuestion() {
   return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+}
+
+function formatUptime(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${days}d ${hours}h ${minutes}m ${seconds}s`;
 }
 
 function buildWelcomeEmbed(user) {
@@ -202,6 +246,26 @@ function sanitizeChannelPart(value) {
     .replace(/^-|-$/g, '');
 
   return sanitized || 'applicant';
+}
+
+function parseUserIdFromInput(value) {
+  const trimmedValue = value.trim();
+  const mentionMatch = trimmedValue.match(/^<@!?(\d+)>$/);
+  if (mentionMatch) {
+    return mentionMatch[1];
+  }
+
+  if (/^\d+$/.test(trimmedValue)) {
+    return trimmedValue;
+  }
+
+  return null;
+}
+
+function generateBanId() {
+  const timestampPart = Date.now().toString(36).toUpperCase();
+  const randomPart = Math.floor(Math.random() * 1679616).toString(36).toUpperCase().padStart(4, '0');
+  return `${timestampPart}-${randomPart}`;
 }
 
 function getUniqueActorChannelName(guild, usernamePart) {
@@ -388,11 +452,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription('Latest feature updates for Northstar Utils v1.1.1')
+        .setDescription('Latest feature updates for Northstar Utils v1.1.2')
         .addFields(
           {
             name: 'Version',
-            value: 'Northstar Utils v1.1.1',
+            value: 'Northstar Utils v1.1.2',
+          },
+          {
+            name: '/ban command',
+            value: 'Added a moderation slash command with mention/ID targeting, selectable durations, optional message deletion, pre-ban DM notices, and Ban ID action reports.',
           },
           {
             name: '/membercount command',
@@ -486,6 +554,136 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x242429);
 
       await interaction.reply({ embeds: [ticketStatsEmbed] });
+      return;
+    }
+
+    if (interaction.commandName === 'ban') {
+      if (!isAuthorized(interaction)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to use this command.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const userInput = interaction.options.getString('user', true);
+      const reason = interaction.options.getString('reason', true).trim();
+      const durationValue = interaction.options.getString('duration', true);
+      const shouldDeleteMessages = interaction.options.getBoolean('delete_messages', true);
+      const banDuration = BAN_DURATION_OPTIONS[durationValue];
+      const userIdToBan = parseUserIdFromInput(userInput);
+
+      if (!banDuration || !userIdToBan) {
+        await interaction.reply({
+          content: 'Invalid ban input. Use a valid user mention/ID and duration.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (userIdToBan === interaction.user.id) {
+        await interaction.reply({
+          content: 'You cannot ban yourself.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (userIdToBan === client.user.id) {
+        await interaction.reply({
+          content: 'I cannot ban myself.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      let userToBan = null;
+      try {
+        userToBan = await client.users.fetch(userIdToBan);
+      } catch (error) {
+        await interaction.editReply('Could not resolve that user. Please provide a valid mention or user ID.');
+        return;
+      }
+
+      const banId = generateBanId();
+      const banTag = `BANID-${banId}`;
+      const appealText = `If you believe our decision was wrong and wish to appeal, contact \`support@northstarmedia.cc\` with your Ban ID: ${banTag}`;
+      const dmEmbed = new EmbedBuilder()
+        .setTitle('You have been banned from __Island Realm__.')
+        .setDescription(`${reason}\n\nLength of Ban: **${banDuration.label}**\n\n${appealText}`)
+        .setColor(0xFF0000)
+        .setFooter({ text: banTag });
+
+      try {
+        await userToBan.send({ embeds: [dmEmbed] });
+      } catch (error) {
+        console.error('Failed to send pre-ban DM:', error);
+      }
+
+      const deleteMessageSeconds = shouldDeleteMessages ? 7 * 24 * 60 * 60 : 0;
+      const banAuditReason = `${reason} (${banTag})`;
+
+      try {
+        await interaction.guild.members.ban(userIdToBan, {
+          reason: banAuditReason,
+          deleteMessageSeconds,
+        });
+      } catch (error) {
+        console.error('Failed to execute /ban command:', error);
+        await interaction.editReply('Failed to ban the user. Check my permissions and role hierarchy.');
+        return;
+      }
+
+      if (banDuration.ms) {
+        setTimeout(async () => {
+          try {
+            await interaction.guild.bans.remove(
+              userIdToBan,
+              `Temporary ban expired (${banDuration.label}) ${banTag}.`,
+            );
+          } catch (error) {
+            console.error('Failed to auto-unban temporarily banned user:', error);
+          }
+        }, banDuration.ms);
+      }
+
+      const banReportEmbed = new EmbedBuilder()
+        .setTitle('Action Report - Ban Issued')
+        .setDescription(
+          [
+            `**Input User Argument:** ${userInput}`,
+            `**Duration:** ${banDuration.label}`,
+            `**Delete Messages:** ${shouldDeleteMessages ? 'Yes' : 'No'}`,
+            `**Banned User:** <@${userIdToBan}>`,
+            `**Banned User ID:** ${userIdToBan}`,
+            '',
+            '───────────────',
+            `**Reason:** ${reason}`,
+          ].join('\n'),
+        )
+        .setColor(0xFF0000)
+        .setFooter({ text: banTag });
+
+      const banReportChannel = interaction.guild.channels.cache.get(BAN_REPORT_CHANNEL_ID);
+      if (banReportChannel?.isTextBased()) {
+        try {
+          await banReportChannel.send({ embeds: [banReportEmbed] });
+        } catch (error) {
+          console.error('Failed to send ban report embed:', error);
+        }
+      }
+
+      await interaction.editReply(`Ban executed for **${userToBan.tag}** (${userIdToBan}). Ban ID: ${banTag}`);
       return;
     }
   }
@@ -1323,15 +1521,27 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (message.mentions.users.has(client.user.id)) {
-    try {
-      const statusMessage = await message.reply({ content: BOT_PING_SEQUENCE[0] });
+    if (message.author.id !== ALLOWED_USER_ID) return;
 
-      for (let i = 1; i < BOT_PING_SEQUENCE.length; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2500));
-        await statusMessage.edit(BOT_PING_SEQUENCE[i]);
-      }
+    try {
+      const rawErrors = recentConsoleErrors.length === 0 ?
+        'No recent console errors recorded.' :
+        recentConsoleErrors.slice(-3).reverse().join('\n');
+      const recentErrorsValue = rawErrors.length > 1024 ? `${rawErrors.slice(0, 1021)}...` : rawErrors;
+      const uptimeValue = formatUptime(client.uptime ?? (process.uptime() * 1000));
+      const statusEmbed = new EmbedBuilder()
+        .setTitle('Northstar Utils Status Report')
+        .setDescription('Online & Functional')
+        .addFields(
+          { name: 'Recent Console Errors', value: recentErrorsValue },
+          { name: 'Uptime', value: uptimeValue },
+        )
+        .setColor(0x242429)
+        .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
+
+      await message.reply({ embeds: [statusEmbed] });
     } catch (error) {
-      console.error('Failed to send bot ping status sequence:', error);
+      console.error('Failed to send status report embed on mention:', error);
     }
     return;
   }

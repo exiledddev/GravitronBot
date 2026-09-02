@@ -51,6 +51,41 @@ const commands = [
       .setName('ticketstats')
       .setDescription('Show open Northstar Utils ticket counts by type.')
       .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('ban')
+      .setDescription('Ban a user by mention or ID with reason, duration, and message deletion options.')
+      .addStringOption((option) =>
+        option
+          .setName('user')
+          .setDescription('User mention or ID to ban.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('reason')
+          .setDescription('Reason for the ban.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('duration')
+          .setDescription('How long the ban should last.')
+          .setRequired(true)
+          .addChoices(
+            { name: '1 day', value: '1d' },
+            { name: '2 days', value: '2d' },
+            { name: '7 days', value: '7d' },
+            { name: 'Permanently', value: 'permanent' },
+          ),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('delete_messages')
+          .setDescription('Delete the user\'s recent messages when banning.')
+          .setRequired(true),
+      )
+      .toJSON(),
 ];
 
 const rest = new REST({ version: '10' }).setToken(token);
