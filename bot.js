@@ -15,13 +15,40 @@ const {
   TextInputStyle, roleMention, channelMention, MessageFlags,
 } = require('discord.js');
 const cron = require('node-cron');
+const { version: BOT_VERSION } = require('./package.json');
 
 const token = process.env.DISCORD_TOKEN;
+const MAX_RECENT_CONSOLE_ERRORS = 5;
+const recentConsoleErrors = [];
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in .env file.');
   process.exit(1);
 }
+
+const originalConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  const formatted = args.map((arg) => {
+    if (arg instanceof Error) {
+      return arg.stack || arg.message;
+    }
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    try {
+      return JSON.stringify(arg);
+    } catch (error) {
+      return String(arg);
+    }
+  }).join(' ');
+
+  recentConsoleErrors.push(`[${new Date().toISOString()}] ${formatted}`);
+  if (recentConsoleErrors.length > MAX_RECENT_CONSOLE_ERRORS) {
+    recentConsoleErrors.shift();
+  }
+
+  originalConsoleError(...args);
+};
 
 const intents = [
   GatewayIntentBits.Guilds,
@@ -131,6 +158,16 @@ const BAN_DURATION_OPTIONS = {
 
 function getRandomQuestion() {
   return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+}
+
+function formatUptime(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${days}d ${hours}h ${minutes}m ${seconds}s`;
 }
 
 function buildWelcomeEmbed(user) {
@@ -1484,15 +1521,27 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (message.mentions.users.has(client.user.id)) {
-    try {
-      const statusMessage = await message.reply({ content: BOT_PING_SEQUENCE[0] });
+    if (message.author.id !== ALLOWED_USER_ID) return;
 
-      for (let i = 1; i < BOT_PING_SEQUENCE.length; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2500));
-        await statusMessage.edit(BOT_PING_SEQUENCE[i]);
-      }
+    try {
+      const rawErrors = recentConsoleErrors.length === 0 ?
+        'No recent console errors recorded.' :
+        recentConsoleErrors.slice(-3).reverse().join('\n');
+      const recentErrorsValue = rawErrors.length > 1024 ? `${rawErrors.slice(0, 1021)}...` : rawErrors;
+      const uptimeValue = formatUptime(client.uptime ?? (process.uptime() * 1000));
+      const statusEmbed = new EmbedBuilder()
+        .setTitle('Northstar Utils Status Report')
+        .setDescription('Online & Functional')
+        .addFields(
+          { name: 'Recent Console Errors', value: recentErrorsValue },
+          { name: 'Uptime', value: uptimeValue },
+        )
+        .setColor(0x242429)
+        .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
+
+      await message.reply({ embeds: [statusEmbed] });
     } catch (error) {
-      console.error('Failed to send bot ping status sequence:', error);
+      console.error('Failed to send status report embed on mention:', error);
     }
     return;
   }
