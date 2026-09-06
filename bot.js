@@ -702,23 +702,20 @@ function formatDurationLabel(ms) {
   return parts.length ? parts.join(' ') : '0 minutes';
 }
 
-function buildEventEmbed({ isLive, startTimestampSeconds, ip, version, players }) {
+function buildEventEmbed({ isLive, startTimestampSeconds, ip, version, players, authorName, authorIconURL }) {
   const timeFieldValue = isLive ?
     `\ud83d\udd34 **LIVE NOW** \u2013 started <t:${startTimestampSeconds}:R>` :
     `<t:${startTimestampSeconds}:R>\n<t:${startTimestampSeconds}:F>`;
 
+  // Headings stay at h3 so the call to action reads smaller than the embed title.
   const description = isLive ?
+    `### \ud83d\udd34 Join ${channelMention(EVENT_STAGE_CHANNEL_ID)} to be in the video.` :
     [
-      '# \ud83d\udd34 THE RECORDING EVENT IS LIVE',
-      `## \u27a1\ufe0f Join: ${channelMention(EVENT_STAGE_CHANNEL_ID)} to be in the video.`,
-    ].join('\n') :
-    [
-      '# \u26a0\ufe0f READ THIS BEFORE THE EVENT',
-      `## \u27a1\ufe0f To participate, join: ${channelMention(EVENT_STAGE_CHANNEL_ID)} or you will miss out on instructions and get banned.`,
-      '**All instructions will be listed in the stage channel by one of our Production Managers.**',
+      `### \u26a0\ufe0f To participate, join ${channelMention(EVENT_STAGE_CHANNEL_ID)} or you will miss out on instructions and get banned.`,
+      'All instructions will be listed in the stage channel by one of our Production Managers.',
     ].join('\n');
 
-  return new EmbedBuilder()
+  const eventEmbed = new EmbedBuilder()
     .setTitle(isLive ? 'RECORDING EVENT LIVE' : 'Recording Event Planned')
     .setDescription(description)
     .addFields(
@@ -730,6 +727,18 @@ function buildEventEmbed({ isLive, startTimestampSeconds, ip, version, players }
     .setColor(isLive ? 0x2ECC71 : 0x242429)
     .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
     .setTimestamp();
+
+  if (authorName) {
+    // The avatar is decoration: drop a malformed icon URL rather than letting
+    // setAuthor throw and take the whole announcement down with it.
+    const hasUsableIcon = typeof authorIconURL === 'string' && /^https?:\/\//.test(authorIconURL);
+    eventEmbed.setAuthor({
+      name: truncateForEmbed(`${authorName} is RECORDING!`, 256),
+      ...(hasUsableIcon ? { iconURL: authorIconURL } : {}),
+    });
+  }
+
+  return eventEmbed;
 }
 
 function buildStartupEmbed(readyClient) {
@@ -781,7 +790,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           },
           {
             name: '/event command (NEW)',
-            value: 'Announces a recording event with an @everyone ping: time till event (Discord relative timestamp), IP, version and the amount of players needed. When the timer runs out the bot automatically posts a second `RECORDING EVENT LIVE` announcement. The `test` option sends both messages without pinging anyone.',
+            value: 'Announces a recording event with an @everyone ping: time till event (Discord relative timestamp), IP, version, the amount of players needed and the `author` the recording is for, shown as "<display name> is RECORDING!". When the timer runs out the bot automatically posts a second `RECORDING EVENT LIVE` announcement. The `test` option sends both messages without pinging anyone.',
           },
           {
             name: '/accept overhaul',
@@ -1100,6 +1109,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const eventIp = interaction.options.getString('ip', true).trim();
       const eventVersion = interaction.options.getString('version', true);
       const playersNeeded = interaction.options.getInteger('players', true);
+      const eventAuthor = interaction.options.getUser('author', true);
       const isTest = interaction.options.getBoolean('test') ?? false;
       const delayMs = parseTimeUntilEvent(timeInput);
 
@@ -1132,6 +1142,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      // Prefer the server display name (nickname), falling back to the global
+      // display name; never the raw username.
+      let eventAuthorName = eventAuthor.displayName;
+      let eventAuthorIconURL = eventAuthor.displayAvatarURL();
+      try {
+        const eventAuthorMember = await interaction.guild.members.fetch(eventAuthor.id);
+        eventAuthorName = eventAuthorMember.displayName;
+        eventAuthorIconURL = eventAuthorMember.displayAvatarURL();
+      } catch (error) {
+        console.error('Failed to resolve the recording author member, using their global display name:', error);
+      }
+
       const buildEventPayload = (isLive) => {
         const payload = {
           embeds: [
@@ -1141,6 +1163,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
               ip: eventIp,
               version: eventVersion,
               players: playersNeeded,
+              authorName: eventAuthorName,
+              authorIconURL: eventAuthorIconURL,
             }),
           ],
           allowedMentions: isTest ? { parse: [] } : { parse: ['everyone'] },

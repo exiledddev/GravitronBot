@@ -133,6 +133,12 @@ const commands = [
           .setRequired(true)
           .setMinValue(1),
       )
+      .addUserOption((option) =>
+        option
+          .setName('author')
+          .setDescription('The user the recording event is for.')
+          .setRequired(true),
+      )
       .addBooleanOption((option) =>
         option
           .setName('test')
