@@ -53,6 +53,95 @@ const commands = [
       .toJSON(),
 
   new SlashCommandBuilder()
+      .setName('project')
+      .setDescription('Create a new Island Realm project ticket.')
+      .addStringOption((option) =>
+        option
+          .setName('name')
+          .setDescription('Project name.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('episode')
+          .setDescription('Episode/Chapter the project is for in the Island Realm series.')
+          .setRequired(true),
+      )
+      .addUserOption((option) =>
+        option
+          .setName('build_manager')
+          .setDescription('Project Build Manager.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('deadline')
+          .setDescription('Project deadline.')
+          .setRequired(false),
+      )
+      .addUserOption((option) =>
+        option
+          .setName('director')
+          .setDescription('Project Director (defaults to you).')
+          .setRequired(false),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('budget')
+          .setDescription('Project budget.')
+          .setRequired(false),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('padd')
+      .setDescription('Add a user to the project ticket this command is run in.')
+      .addUserOption((option) =>
+        option
+          .setName('user')
+          .setDescription('User to add to this project ticket.')
+          .setRequired(true),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('event')
+      .setDescription('Announce a recording event and automatically announce it again when it starts.')
+      .addStringOption((option) =>
+        option
+          .setName('time')
+          .setDescription('Time till the event starts, e.g. 30m, 2h, 1h30m.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('ip')
+          .setDescription('IP players should join for the event.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('version')
+          .setDescription('Minecraft version for the event.')
+          .setRequired(true)
+          .addChoices({ name: '1.21.11', value: '1.21.11' }),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName('players')
+          .setDescription('Amount of players needed.')
+          .setRequired(true)
+          .setMinValue(1),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('test')
+          .setDescription('Send as a test, which skips the @everyone pings.')
+          .setRequired(false),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
       .setName('ban')
       .setDescription('Ban a user by mention or ID with reason, duration, and message deletion options.')
       .addStringOption((option) =>

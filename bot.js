@@ -61,8 +61,9 @@ const client = new Client({
   intents,
 });
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
+
   for (const schedule of CHAT_REVIVE_SCHEDULES) {
     cron.schedule(
       schedule,
@@ -77,6 +78,15 @@ client.once(Events.ClientReady, (readyClient) => {
       },
       { timezone: 'Etc/GMT-3' },
     );
+  }
+
+  try {
+    const startupChannel = await readyClient.channels.fetch(STARTUP_CHANNEL_ID);
+    if (startupChannel?.isTextBased()) {
+      await startupChannel.send({ embeds: [buildStartupEmbed(readyClient)] });
+    }
+  } catch (error) {
+    console.error('Failed to send bot start-up message:', error);
   }
 });
 
@@ -154,6 +164,57 @@ const BAN_DURATION_OPTIONS = {
   '2d': { label: '2 days', ms: 2 * 24 * 60 * 60 * 1000 },
   '7d': { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
   permanent: { label: 'Permanently', ms: null },
+};
+const PROJECT_ROLE_ID = '1521863459741106317';
+const PROJECT_CATEGORY_ID = '1546079186425487420';
+const PROJECT_TOPIC_PREFIX = 'northstar-project:';
+const PROJECT_MEMBER_PERMISSIONS = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.AttachFiles,
+  PermissionFlagsBits.EmbedLinks,
+  PermissionFlagsBits.AddReactions,
+  PermissionFlagsBits.UseExternalEmojis,
+  PermissionFlagsBits.UseApplicationCommands,
+];
+const PROJECT_MEMBER_PERMISSION_OVERWRITE = {
+  ViewChannel: true,
+  SendMessages: true,
+  ReadMessageHistory: true,
+  AttachFiles: true,
+  EmbedLinks: true,
+  AddReactions: true,
+  UseExternalEmojis: true,
+  UseApplicationCommands: true,
+};
+const ACCEPTED_READ_FIRST_CHANNEL_ID = '1546086278418927656';
+const ACCEPTED_QUESTIONS_CHANNEL_ID = '1546082814284533890';
+const HOW_JOIN_CHANNEL_ID = '1506390449516974280';
+const HOW_APPLY_CHANNEL_ID = '1507777195190517811';
+const EVENT_STAGE_CHANNEL_ID = '1503754828558372894';
+const EVENT_MAX_DELAY_MS = 14 * 24 * 60 * 60 * 1000;
+const STARTUP_CHANNEL_ID = '1503748268713054461';
+const ANTI_SPAM_BAN_REASON = 'Bot catcher \u2013 Soft-ban automatically dispatched.';
+const DURATION_UNIT_MS = {
+  d: 86400000,
+  day: 86400000,
+  days: 86400000,
+  h: 3600000,
+  hr: 3600000,
+  hrs: 3600000,
+  hour: 3600000,
+  hours: 3600000,
+  m: 60000,
+  min: 60000,
+  mins: 60000,
+  minute: 60000,
+  minutes: 60000,
+  s: 1000,
+  sec: 1000,
+  secs: 1000,
+  second: 1000,
+  seconds: 1000,
 };
 
 function getRandomQuestion() {
@@ -433,6 +494,258 @@ function getApplicantIdFromChannel(channel) {
   return topicMatch ? topicMatch[1] : null;
 }
 
+function sanitizeProjectChannelName(value) {
+  const sanitized = String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return sanitized || 'project';
+}
+
+function getUniqueProjectChannelName(guild, projectName) {
+  const base = sanitizeProjectChannelName(projectName).slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function isProjectChannel(channel) {
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    return false;
+  }
+
+  if (typeof channel.topic === 'string' && channel.topic.startsWith(PROJECT_TOPIC_PREFIX)) {
+    return true;
+  }
+
+  return channel.parentId === PROJECT_CATEGORY_ID;
+}
+
+async function hasProjectRole(interaction) {
+  if (interaction.user?.id === ALLOWED_USER_ID) {
+    return true;
+  }
+
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return true;
+  }
+
+  const memberRoles = interaction.member?.roles;
+  if (memberRoles?.cache?.has(PROJECT_ROLE_ID)) {
+    return true;
+  }
+
+  if (Array.isArray(memberRoles) && memberRoles.includes(PROJECT_ROLE_ID)) {
+    return true;
+  }
+
+  try {
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    return member.roles.cache.has(PROJECT_ROLE_ID);
+  } catch (error) {
+    console.error('Failed to resolve member roles for project authorization:', error);
+    return false;
+  }
+}
+
+async function resolveGuildTextChannel(guild, channelId) {
+  if (!guild) {
+    return null;
+  }
+
+  const cachedChannel = guild.channels.cache.get(channelId);
+  if (cachedChannel) {
+    return cachedChannel.isTextBased?.() ? cachedChannel : null;
+  }
+
+  try {
+    const fetchedChannel = await guild.channels.fetch(channelId);
+    return fetchedChannel?.isTextBased?.() ? fetchedChannel : null;
+  } catch (error) {
+    console.error(`Failed to resolve channel ${channelId}:`, error);
+    return null;
+  }
+}
+
+function truncateForEmbed(value, maxLength) {
+  const text = String(value ?? '');
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function buildBanReportEmbed({ inputUserArgument, durationLabel, deleteMessages, userId, reason, banTag }) {
+  return new EmbedBuilder()
+    .setTitle('Action Report - Ban Issued')
+    .setDescription(truncateForEmbed(
+      [
+        `**Input User Argument:** ${inputUserArgument}`,
+        `**Duration:** ${durationLabel}`,
+        `**Delete Messages:** ${deleteMessages ? 'Yes' : 'No'}`,
+        `**Banned User:** <@${userId}>`,
+        `**Banned User ID:** ${userId}`,
+        '',
+        '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+        `**Reason:** ${reason}`,
+      ].join('\n'),
+      4096,
+    ))
+    .setColor(0xFF0000)
+    .setFooter({ text: banTag });
+}
+
+async function sendAlertChannelEmbed(guild, embed) {
+  const alertChannel = await resolveGuildTextChannel(guild, BAN_REPORT_CHANNEL_ID);
+  if (!alertChannel) {
+    return;
+  }
+
+  try {
+    await alertChannel.send({ embeds: [embed] });
+  } catch (error) {
+    console.error('Failed to send alert channel embed:', error);
+  }
+}
+
+async function closeTicketChannel(guild, channelId, applicantId, closeMessage) {
+  if (applicantId) {
+    try {
+      const applicantMember = await guild.members.fetch(applicantId);
+      await applicantMember.send(closeMessage || 'Your ticket in Island SMP has been closed.');
+    } catch (error) {
+      console.error('Failed to send ticket closure DM to applicant:', error);
+    }
+  }
+
+  try {
+    await guild.channels.delete(channelId, 'Northstar Utils ticket closed.');
+    return true;
+  } catch (error) {
+    console.error('Failed to delete ticket channel:', error);
+    return false;
+  }
+}
+
+function buildAcceptanceEmbed(applicantId, programLabel) {
+  return new EmbedBuilder()
+    .setTitle('\ud83c\udf89 Application Accepted')
+    .setDescription(
+      [
+        `Congratulations <@${applicantId}>!`,
+        '',
+        `You have been accepted for our **${programLabel}** program!`,
+        '',
+        `Before you do anything, please read: ${channelMention(ACCEPTED_READ_FIRST_CHANNEL_ID)}`,
+        '',
+        `If you have any questions, please tag one of our admins in ${channelMention(ACCEPTED_QUESTIONS_CHANNEL_ID)} and ask them!`,
+      ].join('\n'),
+    )
+    .setColor(0x242429)
+    .setFooter({ text: 'Island Realm \u2013 Northstar Media' })
+    .setTimestamp();
+}
+
+function parseTimeUntilEvent(input) {
+  const compact = String(input ?? '').trim().toLowerCase().replace(/[\s,]/g, '');
+  if (!compact) {
+    return null;
+  }
+
+  const unitPattern = /(\d+(?:\.\d+)?)(days|day|d|hours|hour|hrs|hr|h|minutes|minute|mins|min|m|seconds|second|secs|sec|s)/g;
+  let totalMs = 0;
+  let consumedLength = 0;
+  let match = unitPattern.exec(compact);
+
+  while (match !== null) {
+    totalMs += Number.parseFloat(match[1]) * DURATION_UNIT_MS[match[2]];
+    consumedLength += match[0].length;
+    match = unitPattern.exec(compact);
+  }
+
+  if (consumedLength !== compact.length) {
+    if (!/^\d+(?:\.\d+)?$/.test(compact)) {
+      return null;
+    }
+
+    // A bare number is treated as minutes.
+    totalMs = Number.parseFloat(compact) * DURATION_UNIT_MS.m;
+  }
+
+  totalMs = Math.round(totalMs);
+  if (!Number.isFinite(totalMs) || totalMs <= 0) {
+    return null;
+  }
+
+  return totalMs;
+}
+
+function formatDurationLabel(ms) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+
+  if (days) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+  if (hours) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  if (minutes) parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`);
+  if (seconds && !days && !hours) parts.push(`${seconds} second${seconds === 1 ? '' : 's'}`);
+
+  return parts.length ? parts.join(' ') : '0 minutes';
+}
+
+function buildEventEmbed({ isLive, startTimestampSeconds, ip, version, players }) {
+  const timeFieldValue = isLive ?
+    `\ud83d\udd34 **LIVE NOW** \u2013 started <t:${startTimestampSeconds}:R>` :
+    `<t:${startTimestampSeconds}:R>\n<t:${startTimestampSeconds}:F>`;
+
+  const description = isLive ?
+    [
+      '# \ud83d\udd34 THE RECORDING EVENT IS LIVE',
+      `## \u27a1\ufe0f Join: ${channelMention(EVENT_STAGE_CHANNEL_ID)} to be in the video.`,
+    ].join('\n') :
+    [
+      '# \u26a0\ufe0f READ THIS BEFORE THE EVENT',
+      `## \u27a1\ufe0f To participate, join: ${channelMention(EVENT_STAGE_CHANNEL_ID)} or you will miss out on instructions and get banned.`,
+      '**All instructions will be listed in the stage channel by one of our Production Managers.**',
+    ].join('\n');
+
+  return new EmbedBuilder()
+    .setTitle(isLive ? 'RECORDING EVENT LIVE' : 'Recording Event Planned')
+    .setDescription(description)
+    .addFields(
+      { name: 'Time Till Event', value: timeFieldValue, inline: false },
+      { name: 'IP For Event', value: truncateForEmbed(`\`${ip}\``, 1024), inline: true },
+      { name: 'Version', value: `\`${version}\``, inline: true },
+      { name: 'Amount Of Players Needed', value: `**${players}**`, inline: true },
+    )
+    .setColor(isLive ? 0x2ECC71 : 0x242429)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setTimestamp();
+}
+
+function buildStartupEmbed(readyClient) {
+  return new EmbedBuilder()
+    .setTitle('\ud83d\udfe2 Northstar Utils Online')
+    .setDescription('All systems operational. Northstar Utils has been powered on and is now on standby.')
+    .addFields(
+      { name: 'Version', value: `v${BOT_VERSION}`, inline: true },
+      { name: 'Logged In As', value: `${readyClient.user.tag}`, inline: true },
+      { name: 'Started', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+    )
+    .setColor(0x2ECC71)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setTimestamp();
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
 
@@ -452,37 +765,53 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription('Latest feature updates for Northstar Utils v1.1.2')
+        .setDescription(`Latest feature updates for Northstar Utils v${BOT_VERSION} \u2013 workflow, automation and structuring update.`)
         .addFields(
           {
             name: 'Version',
-            value: 'Northstar Utils v1.1.2',
+            value: `Northstar Utils v${BOT_VERSION}`,
           },
           {
-            name: '/ban command',
-            value: 'Added a moderation slash command with mention/ID targeting, selectable durations, optional message deletion, pre-ban DM notices, and Ban ID action reports.',
+            name: '/project command (NEW)',
+            value: `Creates a builder/project ticket in the projects category. Takes a project name, episode/chapter and build manager (required) plus an optional deadline, director (defaults to you) and budget. Only ${roleMention(PROJECT_ROLE_ID)} holders and administrators can run it. The ticket is private to the build manager, the director, anyone added with \`/padd\` and administrators, and it opens with a "Project Details" embed.`,
           },
           {
-            name: '/membercount command',
-            value: 'Added a slash command that shows the total server member count and how many members joined in the past 24 hours.',
+            name: '/padd command (NEW)',
+            value: 'Run inside a project ticket to grant a user full chat access to that ticket (view, send, attach files, embed links, react).',
           },
           {
-            name: 'Team application form fix',
-            value: 'Fixed the Team application modal by shortening an over-limit label that caused interactions to fail.',
+            name: '/event command (NEW)',
+            value: 'Announces a recording event with an @everyone ping: time till event (Discord relative timestamp), IP, version and the amount of players needed. When the timer runs out the bot automatically posts a second `RECORDING EVENT LIVE` announcement. The `test` option sends both messages without pinging anyone.',
           },
           {
-            name: 'Automatic join welcome flow',
-            value: 'New members now trigger an automatic welcome message in the configured channel and receive a welcome DM embed.',
+            name: '/accept overhaul',
+            value: `Acceptance messages are now sent as an embed in the applicant's DMs instead of being posted in the ticket, with no Discord invite. The role is still granted, ${channelMention(ACCEPTED_QUESTIONS_CHANNEL_ID)} is used as a fallback when DMs are closed, and the ticket is closed automatically afterwards.`,
           },
           {
-            name: '~$sendwelcome trigger',
-            value: `Added a restricted \`~$sendwelcome\` trigger for <@${ALLOWED_USER_ID}> to manually post the welcome embed in any channel.`,
+            name: 'Project creation logging',
+            value: `Every project ticket creation is now logged to ${channelMention(BAN_REPORT_CHANNEL_ID)} alongside the existing ban reports.`,
+          },
+          {
+            name: 'Spam-web auto-ban logging',
+            value: `Automatic soft-bans from the spam trap channel now post the same action report as \`/ban\` to ${channelMention(BAN_REPORT_CHANNEL_ID)} with the reason "${ANTI_SPAM_BAN_REASON}".`,
+          },
+          {
+            name: 'Start-up announcement',
+            value: `The bot now posts a \ud83d\udfe2 "Northstar Utils Online" embed in ${channelMention(STARTUP_CHANNEL_ID)} every time it powers on.`,
+          },
+          {
+            name: 'Updated trigger channels',
+            value: `The "how join" trigger now points to ${channelMention(HOW_JOIN_CHANNEL_ID)} and the "how apply" trigger to ${channelMention(HOW_APPLY_CHANNEL_ID)}.`,
+          },
+          {
+            name: '/close fix',
+            value: 'The command now acknowledges the interaction and still deletes the ticket when the closure DM cannot be delivered.',
           },
         )
         .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })
         .setColor(0x242429);
 
-      await interaction.reply({ embeds: [patchnotesEmbed] });
+      await interaction.reply({ embeds: [patchnotesEmbed], allowedMentions: { parse: [] } });
       return;
     }
 
@@ -554,6 +883,301 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x242429);
 
       await interaction.reply({ embeds: [ticketStatsEmbed] });
+      return;
+    }
+
+    if (interaction.commandName === 'project') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!(await hasProjectRole(interaction))) {
+        await interaction.reply({
+          content: `You need the ${roleMention(PROJECT_ROLE_ID)} role to use this command.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const projectName = interaction.options.getString('name', true).trim();
+      const episode = interaction.options.getString('episode', true).trim();
+      const buildManager = interaction.options.getUser('build_manager', true);
+      const director = interaction.options.getUser('director') ?? interaction.user;
+      const deadline = interaction.options.getString('deadline')?.trim() || null;
+      const budget = interaction.options.getString('budget')?.trim() || null;
+
+      if (!projectName) {
+        await interaction.reply({
+          content: 'The project name cannot be empty.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      let projectCategory = interaction.guild.channels.cache.get(PROJECT_CATEGORY_ID) ?? null;
+      if (!projectCategory) {
+        projectCategory = await interaction.guild.channels.fetch(PROJECT_CATEGORY_ID).catch(() => null);
+      }
+
+      if (!projectCategory || projectCategory.type !== ChannelType.GuildCategory) {
+        await interaction.editReply('Could not find the project category. Check the configured category ID.');
+        return;
+      }
+
+      const permissionOverwrites = [
+        {
+          id: interaction.guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        ...[...new Set([buildManager.id, director.id])].map((memberId) => ({
+          id: memberId,
+          allow: PROJECT_MEMBER_PERMISSIONS,
+        })),
+      ];
+
+      if (client.user?.id) {
+        permissionOverwrites.push({
+          id: client.user.id,
+          allow: [
+            ...PROJECT_MEMBER_PERMISSIONS,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageRoles,
+          ],
+        });
+      }
+
+      let projectChannel = null;
+      try {
+        projectChannel = await interaction.guild.channels.create({
+          name: getUniqueProjectChannelName(interaction.guild, projectName),
+          type: ChannelType.GuildText,
+          parent: projectCategory.id,
+          topic: `${PROJECT_TOPIC_PREFIX}director:${director.id}:manager:${buildManager.id}`,
+          permissionOverwrites,
+          reason: `Project ticket "${projectName}" created by ${interaction.user.tag}`,
+        });
+      } catch (error) {
+        console.error('Failed to create project channel:', error);
+        await interaction.editReply('Failed to create the project channel. Check my permissions and the category ID.');
+        return;
+      }
+
+      const projectDetailFields = [
+        { name: 'Deadline', value: truncateForEmbed(deadline || 'Not specified.', 1024), inline: true },
+        { name: 'Episode / Chapter', value: truncateForEmbed(episode, 1024), inline: true },
+        { name: 'Project Build Manager', value: `<@${buildManager.id}>`, inline: true },
+        { name: 'Project Director', value: `<@${director.id}>`, inline: true },
+      ];
+
+      if (budget) {
+        projectDetailFields.push({ name: 'Project Budget', value: truncateForEmbed(budget, 1024), inline: true });
+      }
+
+      const projectEmbed = new EmbedBuilder()
+        .setTitle(`${projectName} \u2013 Project Details`.slice(0, 256))
+        .setDescription('A new Island Realm project ticket has been opened. Use `/padd` to give someone access to this ticket.')
+        .addFields(...projectDetailFields)
+        .setColor(0x242429)
+        .setFooter({ text: `Created by ${interaction.user.tag}` })
+        .setTimestamp();
+
+      try {
+        await projectChannel.send({
+          content: `<@${director.id}> <@${buildManager.id}>`,
+          embeds: [projectEmbed],
+          allowedMentions: { users: [...new Set([director.id, buildManager.id])] },
+        });
+      } catch (error) {
+        console.error('Failed to send project details embed:', error);
+      }
+
+      const projectLogEmbed = new EmbedBuilder()
+        .setTitle('Action Report - Project Ticket Created')
+        .setDescription(truncateForEmbed(
+          [
+            `**Project Name:** ${projectName}`,
+            `**Channel:** ${projectChannel} (${projectChannel.id})`,
+            `**Created By:** <@${interaction.user.id}> (${interaction.user.id})`,
+            `**Project Build Manager:** <@${buildManager.id}> (${buildManager.id})`,
+            `**Project Director:** <@${director.id}> (${director.id})`,
+            '',
+            '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+            `**Episode / Chapter:** ${episode}`,
+            `**Deadline:** ${deadline || 'Not specified.'}`,
+            `**Budget:** ${budget || 'Not specified.'}`,
+          ].join('\n'),
+          4096,
+        ))
+        .setColor(0x242429)
+        .setTimestamp();
+
+      await sendAlertChannelEmbed(interaction.guild, projectLogEmbed);
+
+      await interaction.editReply(`Project ticket created: ${projectChannel}`);
+      return;
+    }
+
+    if (interaction.commandName === 'padd') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isProjectChannel(interaction.channel)) {
+        await interaction.reply({
+          content: 'This command can only be used inside a project (builder) ticket channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!(await hasProjectRole(interaction))) {
+        await interaction.reply({
+          content: `You need the ${roleMention(PROJECT_ROLE_ID)} role to use this command.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const targetUser = interaction.options.getUser('user', true);
+
+      await interaction.deferReply();
+
+      let targetMember = null;
+      try {
+        targetMember = await interaction.guild.members.fetch(targetUser.id);
+      } catch (error) {
+        console.error('Failed to fetch member for /padd:', error);
+        await interaction.editReply('That user is not a member of this server.');
+        return;
+      }
+
+      try {
+        await interaction.channel.permissionOverwrites.edit(
+          targetMember.id,
+          PROJECT_MEMBER_PERMISSION_OVERWRITE,
+          { reason: `Added to project ticket by ${interaction.user.tag}` },
+        );
+      } catch (error) {
+        console.error('Failed to add member to project ticket:', error);
+        await interaction.editReply('Failed to add that user to this ticket. Check my permissions.');
+        return;
+      }
+
+      await interaction.editReply(`Added <@${targetMember.id}> to this project ticket.`);
+      return;
+    }
+
+    if (interaction.commandName === 'event') {
+      if (!isAuthorized(interaction)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to use this command.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const timeInput = interaction.options.getString('time', true);
+      const eventIp = interaction.options.getString('ip', true).trim();
+      const eventVersion = interaction.options.getString('version', true);
+      const playersNeeded = interaction.options.getInteger('players', true);
+      const isTest = interaction.options.getBoolean('test') ?? false;
+      const delayMs = parseTimeUntilEvent(timeInput);
+
+      if (delayMs === null) {
+        await interaction.reply({
+          content: 'Could not read that time. Use a format like `30m`, `2h`, `1h30m`, or a plain number of minutes.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (delayMs > EVENT_MAX_DELAY_MS) {
+        await interaction.reply({
+          content: `The event has to start within ${formatDurationLabel(EVENT_MAX_DELAY_MS)}.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const startTimestampSeconds = Math.floor((Date.now() + delayMs) / 1000);
+      const announcementChannel = interaction.channel;
+
+      if (!announcementChannel?.isTextBased()) {
+        await interaction.reply({
+          content: 'I cannot send the announcement in this channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const buildEventPayload = (isLive) => {
+        const payload = {
+          embeds: [
+            buildEventEmbed({
+              isLive,
+              startTimestampSeconds,
+              ip: eventIp,
+              version: eventVersion,
+              players: playersNeeded,
+            }),
+          ],
+          allowedMentions: isTest ? { parse: [] } : { parse: ['everyone'] },
+        };
+
+        if (!isTest) {
+          payload.content = '@everyone';
+        }
+
+        return payload;
+      };
+
+      try {
+        await announcementChannel.send(buildEventPayload(false));
+      } catch (error) {
+        console.error('Failed to send recording event announcement:', error);
+        await interaction.editReply('Failed to send the event announcement. Check my permissions in this channel.');
+        return;
+      }
+
+      const announcementChannelId = interaction.channelId;
+      setTimeout(async () => {
+        try {
+          const liveChannel = await client.channels.fetch(announcementChannelId);
+          if (!liveChannel?.isTextBased()) {
+            return;
+          }
+
+          await liveChannel.send(buildEventPayload(true));
+        } catch (error) {
+          console.error('Failed to send recording event live announcement:', error);
+        }
+      }, delayMs);
+
+      await interaction.editReply(
+        `Recording event announced${isTest ? ' (test mode, no pings)' : ''}. The live announcement goes out in ${formatDurationLabel(delayMs)}.`,
+      );
       return;
     }
 
@@ -657,31 +1281,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }, banDuration.ms);
       }
 
-      const banReportEmbed = new EmbedBuilder()
-        .setTitle('Action Report - Ban Issued')
-        .setDescription(
-          [
-            `**Input User Argument:** ${userInput}`,
-            `**Duration:** ${banDuration.label}`,
-            `**Delete Messages:** ${shouldDeleteMessages ? 'Yes' : 'No'}`,
-            `**Banned User:** <@${userIdToBan}>`,
-            `**Banned User ID:** ${userIdToBan}`,
-            '',
-            '───────────────',
-            `**Reason:** ${reason}`,
-          ].join('\n'),
-        )
-        .setColor(0xFF0000)
-        .setFooter({ text: banTag });
+      const banReportEmbed = buildBanReportEmbed({
+        inputUserArgument: userInput,
+        durationLabel: banDuration.label,
+        deleteMessages: shouldDeleteMessages,
+        userId: userIdToBan,
+        reason,
+        banTag,
+      });
 
-      const banReportChannel = interaction.guild.channels.cache.get(BAN_REPORT_CHANNEL_ID);
-      if (banReportChannel?.isTextBased()) {
-        try {
-          await banReportChannel.send({ embeds: [banReportEmbed] });
-        } catch (error) {
-          console.error('Failed to send ban report embed:', error);
-        }
-      }
+      await sendAlertChannelEmbed(interaction.guild, banReportEmbed);
 
       await interaction.editReply(`Ban executed for **${userToBan.tag}** (${userIdToBan}). Ban ID: ${banTag}`);
       return;
@@ -1343,39 +1952,98 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!isAuthorized(interaction)) {
       return;
     }
+
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        content: 'This command can only be used inside a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const applicantId = getApplicantIdFromChannel(interaction.channel);
+
+    if (!applicantId) {
+      await interaction.reply({
+        content: 'Could not find applicant ID. Make sure this command is run in an actor or builder application channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
+    const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
+
+    if (!isActorChannel && !isBuilderChannel) {
+      await interaction.reply({
+        content: 'This command can only be used in actor or builder application channels.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const roleId = isActorChannel ? ACTOR_ROLE_ID : BUILDER_ROLE_ID;
+    const programLabel = isActorChannel ? 'Actor' : 'Builder';
+    const role = interaction.guild.roles.cache.get(roleId);
+
+    if (!role) {
+      await interaction.reply({
+        content: 'Role not found. Check the role ID.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    let applicantMember = null;
     try {
-      const applicantId = getApplicantIdFromChannel(interaction.channel);
+      applicantMember = await interaction.guild.members.fetch(applicantId);
+    } catch (error) {
+      console.error('Failed to fetch applicant for /accept:', error);
+      await interaction.editReply('Could not find the applicant in this server.');
+      return;
+    }
 
-      if (!applicantId) {
-        await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor or builder application channel.');
-        return;
-      }
-
-      const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
-      const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
-
-      if (!isActorChannel && !isBuilderChannel) {
-        await interaction.reply('This command can only be used in actor or builder application channels.');
-        return;
-      }
-
-      const roleId = isActorChannel ? ACTOR_ROLE_ID : BUILDER_ROLE_ID;
-      const role = interaction.guild.roles.cache.get(roleId);
-      
-      if (!role) {
-        await interaction.reply('Role not found. Check the role ID.');
-        return;
-      }
-
-      const applicantMember = await interaction.guild.members.fetch(applicantId);
+    try {
       await applicantMember.roles.add(role);
-      
-      const roleType = isActorChannel ? 'Actor' : 'Builder';
-      await interaction.reply(`Congratulations <@${applicantId}>, your ${roleType} application in Island SMP has been accepted! Welcome to the team!\n\nPlease join this discord server: https://discord.gg/DRmd22gCCf`);
     } catch (error) {
       console.error('Failed to add role:', error);
-      await interaction.reply('Failed to add role. Check my permissions.');
+      await interaction.editReply('Failed to add role. Check my permissions.');
+      return;
     }
+
+    const acceptanceEmbed = buildAcceptanceEmbed(applicantId, programLabel);
+    let deliveryNote = '';
+
+    try {
+      await applicantMember.send({ embeds: [acceptanceEmbed] });
+      deliveryNote = 'Acceptance message sent via DM.';
+    } catch (dmError) {
+      console.error('Failed to DM acceptance message to applicant:', dmError);
+
+      const fallbackChannel = await resolveGuildTextChannel(interaction.guild, ACCEPTED_QUESTIONS_CHANNEL_ID);
+      if (fallbackChannel) {
+        try {
+          await fallbackChannel.send({ embeds: [acceptanceEmbed] });
+          deliveryNote = `DMs are closed, so the acceptance message was posted in ${channelMention(ACCEPTED_QUESTIONS_CHANNEL_ID)}.`;
+        } catch (fallbackError) {
+          console.error('Failed to post acceptance message in fallback channel:', fallbackError);
+          deliveryNote = 'Could not DM the applicant and the fallback channel post failed.';
+        }
+      } else {
+        deliveryNote = 'Could not DM the applicant and the fallback channel could not be resolved.';
+      }
+    }
+
+    await interaction.editReply(
+      `Accepted <@${applicantId}> for the ${programLabel} program and granted the ${role.name} role. ${deliveryNote} Closing this ticket now.`,
+    );
+
+    // The acceptance message above is the applicant's notification, so close the
+    // channel without the extra "your ticket has been closed" DM /close sends.
+    await closeTicketChannel(interaction.guild, interaction.channelId, null);
+    return;
   }
   if(interaction.isChatInputCommand() && interaction.commandName === 'reject') {
     if (!isAuthorized(interaction)) {
@@ -1412,18 +2080,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     const applicantId = getApplicantIdFromChannel(interaction.channel);
     if (!applicantId) {
-      await interaction.reply('Could not find applicant ID. Make sure this command is run in an application or support ticket channel.');
+      await interaction.reply({
+        content: 'Could not find applicant ID. Make sure this command is run in an application or support ticket channel.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
-    try {
-      const applicantMember = await interaction.guild.members.fetch(applicantId);
-      const dmChannel = await applicantMember.createDM();
-      await dmChannel.send('Your ticket in Island SMP has been closed.');
-      await interaction.guild.channels.delete(interaction.channelId);
-    } catch (e) {
-      console.error('Failed to send DM to applicant:', e);
-    }
 
+    await interaction.reply({
+      content: 'Closing this ticket now.',
+      flags: MessageFlags.Ephemeral,
+    });
+
+    await closeTicketChannel(interaction.guild, interaction.channelId, applicantId);
+    return;
   }
 
   if(interaction.isChatInputCommand() && interaction.commandName === 'faq') {
@@ -1473,9 +2143,11 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
+    const banTag = `BANID-${generateBanId()}`;
+
     try {
       await message.member.ban({
-        reason: 'Triggered antispam trap channel.',
+        reason: `${ANTI_SPAM_BAN_REASON} (${banTag})`,
         deleteMessageSeconds: ANTI_SPAM_DELETE_SECONDS,
       });
 
@@ -1483,12 +2155,24 @@ client.on(Events.MessageCreate, async (message) => {
         try {
           await message.guild.bans.remove(
             message.author.id,
-            'Antispam temporary ban expired after 7 days.',
+            `Antispam temporary ban expired after 7 days. (${banTag})`,
           );
         } catch (error) {
           console.error('Failed to auto-unban antispam trap user:', error);
         }
       }, ANTI_SPAM_BAN_DURATION_MS);
+
+      await sendAlertChannelEmbed(
+        message.guild,
+        buildBanReportEmbed({
+          inputUserArgument: `<@${message.author.id}>`,
+          durationLabel: BAN_DURATION_OPTIONS['7d'].label,
+          deleteMessages: true,
+          userId: message.author.id,
+          reason: ANTI_SPAM_BAN_REASON,
+          banTag,
+        }),
+      );
     } catch (error) {
       console.error('Failed to ban antispam trap user:', error);
     }
@@ -1705,12 +2389,12 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (message.content.includes("how") && message.content.includes("apply")) {
     await message.reply(
-        {content:`${channelMention('1156739680994328616')} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`}
+        {content:`${channelMention(HOW_APPLY_CHANNEL_ID)} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`}
     );
   }
   if (message.content.includes("how") && message.content.includes("join")) {
     await message.reply(
-        {content:`${channelMention('1485697198963294342')} is where you can find information about how to participate in our series!` }
+        {content:`${channelMention(HOW_JOIN_CHANNEL_ID)} is where you can find information about how to participate in our series!` }
     );
   }
 
