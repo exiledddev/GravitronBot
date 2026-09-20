@@ -148,6 +148,35 @@ const commands = [
       .toJSON(),
 
   new SlashCommandBuilder()
+      .setName('exec')
+      .setDescription('Execute a ticket action, such as granting a Media Rank.')
+      .addStringOption((option) =>
+        option
+          .setName('type')
+          .setDescription('What to execute.')
+          .setRequired(true)
+          .addChoices({ name: 'media', value: 'media' }),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('tier')
+          .setDescription('Which media tier to grant.')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Media Rank', value: 'media' },
+            { name: 'Media+ Rank', value: 'media_plus' },
+            { name: 'Island Realm Media Partner', value: 'media_partner' },
+          ),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('announce')
+          .setDescription('Announce the new team member publicly.')
+          .setRequired(true),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
       .setName('ban')
       .setDescription('Ban a user by mention or ID with reason, duration, and message deletion options.')
       .addStringOption((option) =>
