@@ -1003,14 +1003,14 @@ function findExistingMediaTicketChannel(guild, userId) {
   );
 }
 
-function buildMediaEmbedField(value) {
-  if (value.length > 1024) {
+function buildMediaPanelDescription(value) {
+  if (value.length > 4096) {
     console.error(
-      `Media panel field is ${value.length} characters, over Discord's 1024 limit. It has been truncated - shorten the wording in buildMediaRankEmbed.`,
+      `Media panel description is ${value.length} characters, over Discord's 4096 limit. It has been truncated - shorten the wording in buildMediaRankEmbed.`,
     );
   }
 
-  return truncateForEmbed(value, 1024);
+  return truncateForEmbed(value, 4096);
 }
 
 function buildMediaTierRequirements(tier) {
@@ -1024,81 +1024,62 @@ function buildMediaTierRequirements(tier) {
   ].join('\n');
 }
 
+function buildMediaTierSection(tier, benefits) {
+  return [
+    `## ${tier.emoji} ${tier.name}`,
+    buildMediaTierRequirements(tier),
+    '',
+    '\ud83c\udf81 **Benefits**',
+    ...benefits,
+  ].join('\n');
+}
+
 function buildMediaRankEmbed() {
-  // Embed titles render smaller than markdown headings, so the panel's title
-  // lives in the description as an h1 to stay the largest element. Field names
-  // cannot be resized at all, which is why each section heading sits inside the
-  // field value and the field name is a zero width space.
+  // Everything lives in the description on purpose: Discord renders markdown
+  // headings in an embed description but prints them literally inside embed
+  // field values, and field names cannot be resized at all. The description is
+  // the only place a real size hierarchy is possible.
+  const description = [
+    '# \ud83c\udfac Island Realm Media Rank',
+    '\ud83d\udcdc Terms & Tiers',
+    '',
+    '### \ud83d\ude80 Want to become a part of the Island Realm team?',
+    'Create and post a Short/TikTok, or any other content related to Island Realm and reach the amount of views required by any tier to unlock your own custom media rank!',
+    '',
+    `\ud83d\udca1 The Media Rank must be renewed every ${MEDIA_RANK_EXPIRATION_DAYS} days or it will automatically expire.`,
+    '',
+    buildMediaTierSection(MEDIA_TIERS.media, [
+      `\u2022 ${roleMention(MEDIA_TIERS.media.roleId)} role in our discord server, giving you a cool name color and distinctiveness from other members.`,
+    ]),
+    '',
+    buildMediaTierSection(MEDIA_TIERS.media_plus, [
+      `\u2022 ${roleMention(MEDIA_TIERS.media_plus.roleId)} role in our discord server, giving you an even cooler name color and separating you from other members in the members tab on the right side of the discord server.`,
+      '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
+    ]),
+    '',
+    buildMediaTierSection(MEDIA_TIERS.media_partner, [
+      `\u2022 ${roleMention(MEDIA_TIERS.media_partner.roleId)} role in our discord server, giving you the coolest name color you can have and separating you from other members in the members tab.`,
+      '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
+      `\u2022 Your own custom channel where you can post your new videos related to the Island Realm, so all of our members can see it, and the permission to ping ${roleMention(MEDIA_PARTNER_PING_ROLE_ID)} for it.`,
+    ]),
+    '',
+    '## \ud83c\udf0e Global Benefits',
+    '\u2022 All Media Rank tiers offer you official recognition as part of our team and from us.',
+    '',
+    '### \u23f3 Renewal',
+    `When the media rank is given to a member, it expires in ${MEDIA_RANK_EXPIRATION_DAYS} days from the date that it was given from.`,
+    '',
+    'To renew it, open a new media ticket with a new video that meets the criteria.',
+    '',
+    '\u26a0\ufe0f Videos submitted must not be older than 1 week.',
+  ].join('\n');
+
   return new EmbedBuilder()
-    .setDescription([
-      '# \ud83c\udfac Island Realm Media Rank',
-      '\ud83d\udcdc Terms & Tiers',
-    ].join('\n'))
-    .addFields(
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          '### \ud83d\ude80 Want to become a part of the Island Realm team?',
-          'Create and post a Short/TikTok, or any other content related to Island Realm and reach the amount of views required by any tier to unlock your own custom media rank!',
-          '',
-          `\ud83d\udca1 The Media Rank must be renewed every ${MEDIA_RANK_EXPIRATION_DAYS} days or it will automatically expire.`,
-        ].join('\n')),
-      },
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          `## ${MEDIA_TIERS.media.emoji} ${MEDIA_TIERS.media.name}`,
-          buildMediaTierRequirements(MEDIA_TIERS.media),
-          '',
-          '\ud83c\udf81 **Benefits**',
-          `\u2022 ${roleMention(MEDIA_TIERS.media.roleId)} role in our discord server, giving you a cool name color and distinctiveness from other members.`,
-        ].join('\n')),
-      },
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          `## ${MEDIA_TIERS.media_plus.emoji} ${MEDIA_TIERS.media_plus.name}`,
-          buildMediaTierRequirements(MEDIA_TIERS.media_plus),
-          '',
-          '\ud83c\udf81 **Benefits**',
-          `\u2022 ${roleMention(MEDIA_TIERS.media_plus.roleId)} role in our discord server, giving you an even cooler name color and separating you from other members in the members tab on the right side of the discord server.`,
-          '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
-        ].join('\n')),
-      },
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          `## ${MEDIA_TIERS.media_partner.emoji} ${MEDIA_TIERS.media_partner.name}`,
-          buildMediaTierRequirements(MEDIA_TIERS.media_partner),
-          '',
-          '\ud83c\udf81 **Benefits**',
-          `\u2022 ${roleMention(MEDIA_TIERS.media_partner.roleId)} role in our discord server, giving you the coolest name color you can have and separating you from other members in the members tab.`,
-          '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
-          `\u2022 Your own custom channel where you can post your new videos related to the Island Realm, so all of our members can see it, and the permission to ping ${roleMention(MEDIA_PARTNER_PING_ROLE_ID)} for it.`,
-        ].join('\n')),
-      },
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          '## \ud83c\udf0e Global Benefits',
-          '\u2022 All Media Rank tiers offer you official recognition as part of our team and from us.',
-        ].join('\n')),
-      },
-      {
-        name: '\u200b',
-        value: buildMediaEmbedField([
-          '### \u23f3 Renewal',
-          `When the media rank is given to a member, it expires in ${MEDIA_RANK_EXPIRATION_DAYS} days from the date that it was given from.`,
-          '',
-          'To renew it, open a new media ticket with a new video that meets the criteria.',
-          '',
-          '\u26a0\ufe0f Videos submitted must not be older than 1 week.',
-        ].join('\n')),
-      },
-    )
+    .setDescription(buildMediaPanelDescription(description))
     .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
     .setColor(0x242429);
 }
+
 
 function buildMediaApplicationEmbed({ applicantId, name, age, videoUrl, tier, notes }) {
   const applicationEmbed = new EmbedBuilder()
