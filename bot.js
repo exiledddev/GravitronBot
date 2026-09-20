@@ -780,7 +780,41 @@ function truncateForEmbed(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
-function buildBanReportEmbed({ inputUserArgument, durationLabel, deleteMessages, userId, reason, banTag }) {
+/**
+ * A plain, readable label for a user. Mentions can render as a raw id or as
+ * "unknown user" once someone has left, so reports carry the username too.
+ */
+function formatUserLabel(user) {
+  if (!user) {
+    return 'Unknown';
+  }
+
+  // Accounts migrated to the new username system report a '0' discriminator.
+  const username = user.discriminator && user.discriminator !== '0' ? user.tag : user.username;
+  const displayName = user.globalName || null;
+
+  if (!username) {
+    return 'Unknown';
+  }
+
+  return displayName && displayName !== username ? `${username} (${displayName})` : `${username}`;
+}
+
+function buildBanReportEmbed({
+  inputUserArgument,
+  durationLabel,
+  deleteMessages,
+  userId,
+  bannedUserLabel,
+  reason,
+  banTag,
+  issuedByLabel,
+  issuedById,
+}) {
+  const issuedByLine = issuedById ?
+    `**Issued By:** <@${issuedById}> \u2013 \`${issuedByLabel}\` (${issuedById})` :
+    `**Issued By:** ${issuedByLabel}`;
+
   return new EmbedBuilder()
     .setTitle('Action Report - Ban Issued')
     .setDescription(truncateForEmbed(
@@ -788,8 +822,12 @@ function buildBanReportEmbed({ inputUserArgument, durationLabel, deleteMessages,
         `**Input User Argument:** ${inputUserArgument}`,
         `**Duration:** ${durationLabel}`,
         `**Delete Messages:** ${deleteMessages ? 'Yes' : 'No'}`,
+        '',
         `**Banned User:** <@${userId}>`,
+        `**Banned Username:** \`${bannedUserLabel}\``,
         `**Banned User ID:** ${userId}`,
+        '',
+        issuedByLine,
         '',
         '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
         `**Reason:** ${reason}`,
@@ -965,6 +1003,16 @@ function findExistingMediaTicketChannel(guild, userId) {
   );
 }
 
+function buildMediaEmbedField(value) {
+  if (value.length > 1024) {
+    console.error(
+      `Media panel field is ${value.length} characters, over Discord's 1024 limit. It has been truncated - shorten the wording in buildMediaRankEmbed.`,
+    );
+  }
+
+  return truncateForEmbed(value, 1024);
+}
+
 function buildMediaTierRequirements(tier) {
   return [
     '\ud83d\udcdc **Requirements**',
@@ -977,61 +1025,75 @@ function buildMediaTierRequirements(tier) {
 }
 
 function buildMediaRankEmbed() {
+  // Embed titles render smaller than markdown headings, so the panel's title
+  // lives in the description as an h1 to stay the largest element. Field names
+  // cannot be resized at all, which is why each section heading sits inside the
+  // field value and the field name is a zero width space.
   return new EmbedBuilder()
-    .setTitle('\ud83c\udfac Island Realm Media Rank')
-    .setDescription('\ud83d\udcdc Terms & Tiers')
+    .setDescription([
+      '# \ud83c\udfac Island Realm Media Rank',
+      '\ud83d\udcdc Terms & Tiers',
+    ].join('\n'))
     .addFields(
       {
-        name: '\ud83d\ude80 Want to become a part of the Island Realm team?',
-        value: [
-          'Create and post a Short/TikTok, or any other content related to Rifted Realities and reach the amount of views required by any tier to unlock your own custom media rank!',
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          '### \ud83d\ude80 Want to become a part of the Island Realm team?',
+          'Create and post a Short/TikTok, or any other content related to Island Realm and reach the amount of views required by any tier to unlock your own custom media rank!',
           '',
           `\ud83d\udca1 The Media Rank must be renewed every ${MEDIA_RANK_EXPIRATION_DAYS} days or it will automatically expire.`,
-        ].join('\n'),
+        ].join('\n')),
       },
       {
-        name: `${MEDIA_TIERS.media.emoji} ${MEDIA_TIERS.media.name}`,
-        value: [
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          `## ${MEDIA_TIERS.media.emoji} ${MEDIA_TIERS.media.name}`,
           buildMediaTierRequirements(MEDIA_TIERS.media),
           '',
           '\ud83c\udf81 **Benefits**',
           `\u2022 ${roleMention(MEDIA_TIERS.media.roleId)} role in our discord server, giving you a cool name color and distinctiveness from other members.`,
-        ].join('\n'),
+        ].join('\n')),
       },
       {
-        name: `${MEDIA_TIERS.media_plus.emoji} ${MEDIA_TIERS.media_plus.name}`,
-        value: [
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          `## ${MEDIA_TIERS.media_plus.emoji} ${MEDIA_TIERS.media_plus.name}`,
           buildMediaTierRequirements(MEDIA_TIERS.media_plus),
           '',
           '\ud83c\udf81 **Benefits**',
           `\u2022 ${roleMention(MEDIA_TIERS.media_plus.roleId)} role in our discord server, giving you an even cooler name color and separating you from other members in the members tab on the right side of the discord server.`,
           '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
-        ].join('\n'),
+        ].join('\n')),
       },
       {
-        name: `${MEDIA_TIERS.media_partner.emoji} ${MEDIA_TIERS.media_partner.name}`,
-        value: [
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          `## ${MEDIA_TIERS.media_partner.emoji} ${MEDIA_TIERS.media_partner.name}`,
           buildMediaTierRequirements(MEDIA_TIERS.media_partner),
           '',
           '\ud83c\udf81 **Benefits**',
           `\u2022 ${roleMention(MEDIA_TIERS.media_partner.roleId)} role in our discord server, giving you the coolest name color you can have and separating you from other members in the members tab.`,
           '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
           `\u2022 Your own custom channel where you can post your new videos related to the Island Realm, so all of our members can see it, and the permission to ping ${roleMention(MEDIA_PARTNER_PING_ROLE_ID)} for it.`,
-        ].join('\n'),
+        ].join('\n')),
       },
       {
-        name: '\ud83c\udf0e Global Benefits',
-        value: '\u2022 All Media Rank tiers offer you official recognition as part of our team and from us.',
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          '## \ud83c\udf0e Global Benefits',
+          '\u2022 All Media Rank tiers offer you official recognition as part of our team and from us.',
+        ].join('\n')),
       },
       {
-        name: '\u23f3 Renewal',
-        value: [
+        name: '\u200b',
+        value: buildMediaEmbedField([
+          '### \u23f3 Renewal',
           `When the media rank is given to a member, it expires in ${MEDIA_RANK_EXPIRATION_DAYS} days from the date that it was given from.`,
           '',
           'To renew it, open a new media ticket with a new video that meets the criteria.',
           '',
           '\u26a0\ufe0f Videos submitted must not be older than 1 week.',
-        ].join('\n'),
+        ].join('\n')),
       },
     )
     .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
@@ -1173,6 +1235,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           {
             name: `\u23f3 ${MEDIA_RANK_EXPIRATION_DAYS} day Media Rank expiry`,
             value: `Media Rank roles now expire ${MEDIA_RANK_EXPIRATION_DAYS} days after they are granted. Expirations are stored in a SQLite database, so they survive restarts, crashes and redeploys - anything that lapsed while the bot was offline is cleaned up the moment it comes back. Expired members get a DM pointing them at ${channelMention(MEDIA_RENEWAL_CHANNEL_ID)} to renew.`,
+          },
+          {
+            name: '\ud83d\udd28 Ban report details',
+            value: 'Ban action reports now record who issued the ban and the banned user\'s username, so a report still identifies them when the mention only resolves to an id or "unknown user". Automatic spam trap bans are credited to the bot.',
           },
           {
             name: '\ud83c\udfab Ticket type routing',
@@ -1866,8 +1932,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         durationLabel: banDuration.label,
         deleteMessages: shouldDeleteMessages,
         userId: userIdToBan,
+        bannedUserLabel: formatUserLabel(userToBan),
         reason,
         banTag,
+        issuedByLabel: formatUserLabel(interaction.user),
+        issuedById: interaction.user.id,
       });
 
       await sendAlertChannelEmbed(interaction.guild, banReportEmbed);
@@ -2963,8 +3032,10 @@ client.on(Events.MessageCreate, async (message) => {
           durationLabel: BAN_DURATION_OPTIONS['7d'].label,
           deleteMessages: true,
           userId: message.author.id,
+          bannedUserLabel: formatUserLabel(message.author),
           reason: ANTI_SPAM_BAN_REASON,
           banTag,
+          issuedByLabel: 'Northstar Utils (automatic spam trap)',
         }),
       );
     } catch (error) {
