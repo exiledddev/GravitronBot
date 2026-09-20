@@ -12,9 +12,16 @@ const {
   PermissionFlagsBits,
   TextInputBuilder,
   ChatInputBuilder,
-  TextInputStyle, roleMention, channelMention, MessageFlags,
+  StringSelectMenuBuilder,
+  TextInputStyle, roleMention, channelMention, userMention, MessageFlags,
 } = require('discord.js');
 const cron = require('node-cron');
+const {
+  initializeTemporaryRoleStore,
+  grantTemporaryRole,
+  processExpiredTemporaryRoles,
+  startTemporaryRoleExpirationWorker,
+} = require('./temporary-roles');
 const { version: BOT_VERSION } = require('./package.json');
 
 const token = process.env.DISCORD_TOKEN;
@@ -80,6 +87,29 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }
 
+  // Temporary role storage: open it, immediately clear anything that expired
+  // while the bot was offline, then start the periodic checker.
+  try {
+    initializeTemporaryRoleStore();
+
+    const recovery = await processExpiredTemporaryRoles({
+      client: readyClient,
+      notify: sendMediaRankExpirationDM,
+    });
+    if (recovery.processed > 0 || recovery.failed > 0) {
+      console.log(
+        `Temporary role startup recovery: ${recovery.processed} processed, ${recovery.skipped} skipped, ${recovery.failed} failed.`,
+      );
+    }
+
+    startTemporaryRoleExpirationWorker({
+      client: readyClient,
+      notify: sendMediaRankExpirationDM,
+    });
+  } catch (error) {
+    console.error('Failed to start the temporary role expiration system:', error);
+  }
+
   try {
     const startupChannel = await readyClient.channels.fetch(STARTUP_CHANNEL_ID);
     if (startupChannel?.isTextBased()) {
@@ -100,22 +130,74 @@ const BUILDER_MODAL_ID = 'builder_apply_form';
 const STAFF_MODAL_ID = 'staff_apply_form';
 const TEAM_MODAL_ID = 'team_apply_form';
 const SUPPORT_MODAL_ID = 'support_ticket_form';
+const MEDIA_BUTTON_ID = 'media_apply_open';
+const MEDIA_TIER_SELECT_ID = 'media_apply_tier';
+const MEDIA_MODAL_ID = 'media_apply_form';
 const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
 const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const STAFF_TOPIC_PREFIX = 'staff-app:user:';
 const TEAM_TOPIC_PREFIX = 'team-app:user:';
 const SUPPORT_TOPIC_PREFIX = 'support-ticket:user:';
-const TICKET_STATS_TYPES = [
-  { key: 'actor', label: 'Actor', topicPrefix: ACTOR_TOPIC_PREFIX },
-  { key: 'builder', label: 'Builder', topicPrefix: BUILDER_TOPIC_PREFIX },
-  { key: 'staff', label: 'Staff', topicPrefix: STAFF_TOPIC_PREFIX },
-  { key: 'team', label: 'Team', topicPrefix: TEAM_TOPIC_PREFIX },
-  { key: 'support', label: 'Support', topicPrefix: SUPPORT_TOPIC_PREFIX },
-];
+const MEDIA_TOPIC_PREFIX = 'media-app:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
 const ADMIN_ROLE_ID = '1503739527804616836';
 const ACTOR_ROLE_ID = '1503776275645337621';
 const BUILDER_ROLE_ID = '1503778122275885121';
+// Structured ticket type definitions. Command availability is derived from this
+// registry rather than from ad-hoc per-command channel checks.
+const TICKET_TYPES = [
+  {
+    key: 'actor',
+    label: 'Actor',
+    topicPrefix: ACTOR_TOPIC_PREFIX,
+    acceptRoleId: ACTOR_ROLE_ID,
+    supportsAccept: true,
+    supportsReject: true,
+    supportsExec: false,
+  },
+  {
+    key: 'builder',
+    label: 'Builder',
+    topicPrefix: BUILDER_TOPIC_PREFIX,
+    acceptRoleId: BUILDER_ROLE_ID,
+    supportsAccept: true,
+    supportsReject: true,
+    supportsExec: false,
+  },
+  {
+    key: 'staff',
+    label: 'Staff',
+    topicPrefix: STAFF_TOPIC_PREFIX,
+    supportsAccept: false,
+    supportsReject: false,
+    supportsExec: false,
+  },
+  {
+    key: 'team',
+    label: 'Team',
+    topicPrefix: TEAM_TOPIC_PREFIX,
+    supportsAccept: false,
+    supportsReject: false,
+    supportsExec: false,
+  },
+  {
+    key: 'support',
+    label: 'Support',
+    topicPrefix: SUPPORT_TOPIC_PREFIX,
+    supportsAccept: false,
+    supportsReject: false,
+    supportsExec: false,
+  },
+  {
+    key: 'media',
+    label: 'Media',
+    topicPrefix: MEDIA_TOPIC_PREFIX,
+    supportsAccept: false,
+    supportsReject: true,
+    supportsExec: true,
+  },
+];
+const TICKET_STATS_TYPES = TICKET_TYPES;
 const ANTI_SPAM_CHANNEL_NAME = 'spam-web';
 const ANTI_SPAM_TOPIC = 'northstar-antispam-trap';
 const ANTI_SPAM_BAN_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -195,6 +277,52 @@ const HOW_APPLY_CHANNEL_ID = '1507777195190517811';
 const EVENT_STAGE_CHANNEL_ID = '1503754828558372894';
 const EVENT_MAX_DELAY_MS = 14 * 24 * 60 * 60 * 1000;
 const STARTUP_CHANNEL_ID = '1503748268713054461';
+// Media Rank system ---------------------------------------------------------
+// Single source of truth for the Media Rank tiers. /exec, the temporary role
+// storage, expiration handling and the acceptance messages all read from here,
+// so adding a future tier only needs a new entry.
+const MEDIA_TIERS = {
+  media: {
+    key: 'media',
+    name: 'Media Rank',
+    applicationLabel: 'Media',
+    emoji: '\ud83c\udfc5',
+    roleId: '1551107511694786633',
+    viewsRequired: '1k',
+  },
+  media_plus: {
+    key: 'media_plus',
+    name: 'Media+ Rank',
+    applicationLabel: 'Media+',
+    emoji: '\u2728',
+    roleId: '1551107707946406018',
+    viewsRequired: '2.5k',
+  },
+  media_partner: {
+    key: 'media_partner',
+    name: 'Island Realm Media Partner',
+    applicationLabel: 'Island Realm Media Partner',
+    emoji: '\ud83d\udc51',
+    roleId: '1551107839987159050',
+    viewsRequired: '5k+',
+    customChannelRequired: true,
+  },
+};
+// The media reviewer happens to be the same person as the bot's allowed user,
+// but it is a distinct role so it gets its own name.
+const MEDIA_REVIEWER_USER_ID = ALLOWED_USER_ID;
+const MEDIA_ANNOUNCEMENT_CHANNEL_ID = '1503753701217669151';
+const MEDIA_ANNOUNCEMENT_ROLE_ID = '1550904220159582249';
+const MEDIA_RENEWAL_CHANNEL_ID = '1551115151686500412';
+const MEDIA_PARTNER_PING_ROLE_ID = '1550904026571341906';
+const MEDIA_PARTNER_CONTACT = 'markedexiled';
+const MEDIA_RANK_EXPIRATION_DAYS = 15;
+// Overridable so the expiration can be shortened while testing. Production must
+// be left on the 15 day default.
+const MEDIA_RANK_DURATION_MS = Number.parseInt(process.env.MEDIA_RANK_DURATION_MS || '', 10) > 0 ?
+  Number.parseInt(process.env.MEDIA_RANK_DURATION_MS, 10) :
+  MEDIA_RANK_EXPIRATION_DAYS * 24 * 60 * 60 * 1000;
+const MEDIA_TEMPORARY_ROLE_IDS = Object.values(MEDIA_TIERS).map((tier) => tier.roleId);
 const ANTI_SPAM_BAN_REASON = 'Bot catcher \u2013 Soft-ban automatically dispatched.';
 const DURATION_UNIT_MS = {
   d: 86400000,
@@ -476,21 +604,23 @@ function getOpenTicketStats(guild) {
   return { counts, total };
 }
 
-function getApplicantIdFromChannel(channel) {
-  const channelTopic = channel?.topic || '';
-  const topicPrefixes = [
-    ACTOR_TOPIC_PREFIX,
-    BUILDER_TOPIC_PREFIX,
-    STAFF_TOPIC_PREFIX,
-    TEAM_TOPIC_PREFIX,
-    SUPPORT_TOPIC_PREFIX,
-  ];
-  let topicMatch = null;
-  for (const prefix of topicPrefixes) {
-    topicMatch = channelTopic.match(new RegExp(`^${prefix}(\\d+)`));
-    if (topicMatch) break;
+function getTicketTypeFromChannel(channel) {
+  const channelTopic = channel?.topic;
+  if (typeof channelTopic !== 'string') {
+    return null;
   }
 
+  return TICKET_TYPES.find((type) => channelTopic.startsWith(type.topicPrefix)) || null;
+}
+
+function getApplicantIdFromChannel(channel) {
+  const channelTopic = channel?.topic || '';
+  const ticketType = getTicketTypeFromChannel(channel);
+  if (!ticketType) {
+    return null;
+  }
+
+  const topicMatch = channelTopic.match(new RegExp(`^${ticketType.topicPrefix}(\\d+)`));
   return topicMatch ? topicMatch[1] : null;
 }
 
@@ -741,6 +871,189 @@ function buildEventEmbed({ isLive, startTimestampSeconds, ip, version, players, 
   return eventEmbed;
 }
 
+function getUniqueMediaChannelName(guild, usernamePart) {
+  const base = `\ud83c\udfacmedia-${usernamePart}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function findExistingMediaTicketChannel(guild, userId) {
+  const marker = `${MEDIA_TOPIC_PREFIX}${userId}`;
+
+  return guild.channels.cache.find(
+      (channel) =>
+        channel.type === ChannelType.GuildText &&
+        typeof channel.topic === 'string' &&
+        channel.topic.startsWith(marker),
+  );
+}
+
+function buildMediaTierRequirements(tier) {
+  return [
+    '\ud83d\udcdc **Requirements**',
+    '\u2022 Must be related to Island Realm',
+    '\u2022 Can be a gameplay clip, edit, funny moment, showcase, montage, lore video etc.',
+    `\u2022 Must reach ${tier.viewsRequired} views on the video you're applying with.`,
+    '\u2022 Submit proof of the views in the ticket when you open it, along a link to the video you\'re applying with.',
+    '\u2022 Include the Island Realm Discord invite in the comment section, pinned (unless it is tiktok and you can\'t pin comments, you still need to send it in the comments however and keep it as visible as possible).',
+  ].join('\n');
+}
+
+function buildMediaRankEmbed() {
+  return new EmbedBuilder()
+    .setTitle('\ud83c\udfac Island Realm Media Rank')
+    .setDescription('\ud83d\udcdc Terms & Tiers')
+    .addFields(
+      {
+        name: '\ud83d\ude80 Want to become a part of the Island Realm team?',
+        value: [
+          'Create and post a Short/TikTok, or any other content related to Rifted Realities and reach the amount of views required by any tier to unlock your own custom media rank!',
+          '',
+          `\ud83d\udca1 The Media Rank must be renewed every ${MEDIA_RANK_EXPIRATION_DAYS} days or it will automatically expire.`,
+        ].join('\n'),
+      },
+      {
+        name: `${MEDIA_TIERS.media.emoji} ${MEDIA_TIERS.media.name}`,
+        value: [
+          buildMediaTierRequirements(MEDIA_TIERS.media),
+          '',
+          '\ud83c\udf81 **Benefits**',
+          `\u2022 ${roleMention(MEDIA_TIERS.media.roleId)} role in our discord server, giving you a cool name color and distinctiveness from other members.`,
+        ].join('\n'),
+      },
+      {
+        name: `${MEDIA_TIERS.media_plus.emoji} ${MEDIA_TIERS.media_plus.name}`,
+        value: [
+          buildMediaTierRequirements(MEDIA_TIERS.media_plus),
+          '',
+          '\ud83c\udf81 **Benefits**',
+          `\u2022 ${roleMention(MEDIA_TIERS.media_plus.roleId)} role in our discord server, giving you an even cooler name color and separating you from other members in the members tab on the right side of the discord server.`,
+          '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
+        ].join('\n'),
+      },
+      {
+        name: `${MEDIA_TIERS.media_partner.emoji} ${MEDIA_TIERS.media_partner.name}`,
+        value: [
+          buildMediaTierRequirements(MEDIA_TIERS.media_partner),
+          '',
+          '\ud83c\udf81 **Benefits**',
+          `\u2022 ${roleMention(MEDIA_TIERS.media_partner.roleId)} role in our discord server, giving you the coolest name color you can have and separating you from other members in the members tab.`,
+          '\u2022 Higher order priority in the right side of the discord server in the members page, making you more visible to everyone.',
+          `\u2022 Your own custom channel where you can post your new videos related to the Island Realm, so all of our members can see it, and the permission to ping ${roleMention(MEDIA_PARTNER_PING_ROLE_ID)} for it.`,
+        ].join('\n'),
+      },
+      {
+        name: '\ud83c\udf0e Global Benefits',
+        value: '\u2022 All Media Rank tiers offer you official recognition as part of our team and from us.',
+      },
+      {
+        name: '\u23f3 Renewal',
+        value: [
+          `When the media rank is given to a member, it expires in ${MEDIA_RANK_EXPIRATION_DAYS} days from the date that it was given from.`,
+          '',
+          'To renew it, open a new media ticket with a new video that meets the criteria.',
+          '',
+          '\u26a0\ufe0f Videos submitted must not be older than 1 week.',
+        ].join('\n'),
+      },
+    )
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setColor(0x242429);
+}
+
+function buildMediaApplicationEmbed({ applicantId, name, age, videoUrl, tier, notes }) {
+  const applicationEmbed = new EmbedBuilder()
+    .setTitle('\ud83c\udfac Media Rank Application')
+    .addFields(
+      { name: '\ud83d\udc64 Applicant', value: `<@${applicantId}>`, inline: false },
+      { name: '\ud83d\udcdd Name', value: truncateForEmbed(name, 1024), inline: true },
+      { name: '\ud83c\udf82 Age', value: truncateForEmbed(age, 1024), inline: true },
+      { name: '\ud83c\udfc6 Media Tier Wanted', value: `${tier.emoji} ${tier.name}`, inline: true },
+      { name: '\ud83c\udfa5 Video', value: truncateForEmbed(videoUrl, 1024), inline: false },
+    )
+    .setFooter({ text: 'Please do not ping anyone until we review your application.' })
+    .setColor(0xFF0000)
+    .setTimestamp();
+
+  if (notes) {
+    applicationEmbed.addFields({ name: '\ud83d\udccc Additional Notes', value: truncateForEmbed(notes, 1024), inline: false });
+  }
+
+  return applicationEmbed;
+}
+
+function buildMediaAcceptanceEmbed({ tier, displayName }) {
+  // Embed titles do not render mentions, so the applicant's display name is used
+  // in the title and the mention is carried by the message content instead.
+  const acceptanceEmbed = new EmbedBuilder()
+    .setTitle(truncateForEmbed(`\ud83c\udf89 Congratulations ${displayName}!`, 256))
+    .setDescription(`You have been accepted for the **${tier.name}** role.`)
+    .setColor(0x242429)
+    .setFooter({ text: `Island Realm \u2013 Media Rank \u2022 Expires in ${MEDIA_RANK_EXPIRATION_DAYS} days` })
+    .setTimestamp();
+
+  if (tier.customChannelRequired) {
+    acceptanceEmbed.addFields({
+      name: '\ud83d\udcfa Custom Channel',
+      value: `DM Exiled (\`${MEDIA_PARTNER_CONTACT}\`) for your custom channel creation in our server.`,
+    });
+  }
+
+  return acceptanceEmbed;
+}
+
+function buildMediaExpirationEmbed() {
+  return new EmbedBuilder()
+    .setTitle('\u23f0 Your Media Rank has expired.')
+    .setDescription(`Please renew it by following the instructions in ${channelMention(MEDIA_RENEWAL_CHANNEL_ID)}`)
+    .setColor(0x242429)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setTimestamp();
+}
+
+function buildMediaAnnouncementEmbed({ applicantId, tier }) {
+  return new EmbedBuilder()
+    .setTitle('\ud83c\udf89 A new member joined the Island Realm team!')
+    .setDescription(
+      [
+        `<@${applicantId}> has joined the Island Realm team through the Media Rank program.`,
+        '',
+        `They earned the ${roleMention(tier.roleId)} rank \u2013 go give them a warm welcome!`,
+      ].join('\n'),
+    )
+    .setColor(0x242429)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setTimestamp();
+}
+
+/**
+ * Confirms the bot can actually hand out a role before it claims to have done so.
+ */
+function canBotAssignRole(guild, role) {
+  const botMember = guild.members.me;
+  if (!botMember || !role) {
+    return false;
+  }
+
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    return false;
+  }
+
+  return role.managed !== true && botMember.roles.highest.comparePositionTo(role) > 0;
+}
+
+async function sendMediaRankExpirationDM({ member }) {
+  await member.send({ embeds: [buildMediaExpirationEmbed()] });
+}
+
 function buildStartupEmbed(readyClient) {
   return new EmbedBuilder()
     .setTitle('\ud83d\udfe2 Northstar Utils Online')
@@ -774,11 +1087,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const patchnotesEmbed = new EmbedBuilder()
         .setTitle('Northstar Utils Patch Notes')
-        .setDescription(`Latest feature updates for Northstar Utils v${BOT_VERSION} \u2013 workflow, automation and structuring update.`)
+        .setDescription(`Latest feature updates for Northstar Utils v${BOT_VERSION} \u2013 the Island Realm Media Rank update.`)
         .addFields(
           {
             name: 'Version',
             value: `Northstar Utils v${BOT_VERSION}`,
+          },
+          {
+            name: '\ud83c\udfac Media Rank system (NEW)',
+            value: `\`~$postmediaembed\` posts the Island Realm Media Rank panel with an "Apply for Media" button. Applicants pick a tier (${MEDIA_TIERS.media.applicationLabel}, ${MEDIA_TIERS.media_plus.applicationLabel}, ${MEDIA_TIERS.media_partner.applicationLabel}), fill in a short form, and the bot opens a \`media-\` ticket pinging the media reviewer with every submitted detail.`,
+          },
+          {
+            name: '\u2699\ufe0f /exec command (NEW)',
+            value: `Grants the Media Rank tier to the applicant of the media ticket it is run in, resolved from the ticket itself rather than a user argument. Sends the acceptance DM, and with \`announce: true\` posts a team announcement in ${channelMention(MEDIA_ANNOUNCEMENT_CHANNEL_ID)}. Built so more execution types can be added later.`,
+          },
+          {
+            name: `\u23f3 ${MEDIA_RANK_EXPIRATION_DAYS} day Media Rank expiry`,
+            value: `Media Rank roles now expire ${MEDIA_RANK_EXPIRATION_DAYS} days after they are granted. Expirations are stored in a SQLite database, so they survive restarts, crashes and redeploys - anything that lapsed while the bot was offline is cleaned up the moment it comes back. Expired members get a DM pointing them at ${channelMention(MEDIA_RENEWAL_CHANNEL_ID)} to renew.`,
+          },
+          {
+            name: '\ud83c\udfab Ticket type routing',
+            value: 'Ticket commands now read from one structured ticket type registry. `/reject` works in media tickets, `/accept` deliberately does not, and actor/builder tickets behave exactly as before.',
           },
           {
             name: '/project command (NEW)',
@@ -1205,6 +1534,164 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'exec') {
+      if (!isAuthorized(interaction)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to use this command.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const executionType = interaction.options.getString('type', true);
+      const tierKey = interaction.options.getString('tier', true);
+      const shouldAnnounce = interaction.options.getBoolean('announce', true);
+
+      if (executionType !== 'media') {
+        await interaction.reply({
+          content: 'That execution type is not supported yet.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const ticketType = getTicketTypeFromChannel(interaction.channel);
+      if (!ticketType?.supportsExec) {
+        await interaction.reply({
+          content: 'This command can only be used inside a media ticket.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const tier = MEDIA_TIERS[tierKey];
+      if (!tier) {
+        await interaction.reply({
+          content: 'That media tier is not available.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      // The applicant always comes from the ticket itself, never from an argument.
+      const applicantId = getApplicantIdFromChannel(interaction.channel);
+      if (!applicantId) {
+        await interaction.reply({
+          content: 'Could not resolve the applicant from this ticket.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      // 1. Validate the member, the role and the bot's ability to grant it.
+      let applicantMember = null;
+      try {
+        applicantMember = await interaction.guild.members.fetch(applicantId);
+      } catch (error) {
+        console.error('Failed to fetch the media applicant for /exec:', error);
+        await interaction.editReply('Could not find the applicant in this server. No role was granted.');
+        return;
+      }
+
+      let role = interaction.guild.roles.cache.get(tier.roleId) ?? null;
+      if (!role) {
+        role = await interaction.guild.roles.fetch(tier.roleId).catch(() => null);
+      }
+
+      if (!role) {
+        await interaction.editReply(`The ${tier.name} role could not be found. No role was granted.`);
+        return;
+      }
+
+      if (!canBotAssignRole(interaction.guild, role)) {
+        await interaction.editReply(
+          `I cannot assign **${role.name}**. Check that I have Manage Roles and that my highest role sits above it. No role was granted.`,
+        );
+        return;
+      }
+
+      // 2. Grant the Discord role.
+      try {
+        await applicantMember.roles.add(role, `Media Rank granted by ${interaction.user.tag}`);
+      } catch (error) {
+        console.error('Failed to grant the media rank role:', error);
+        await interaction.editReply('Failed to grant the role. Check my permissions and role hierarchy. No role was granted.');
+        return;
+      }
+
+      // 3. Persist the expiration so it survives restarts.
+      const statusNotes = [];
+      let expiresAt = null;
+      try {
+        ({ expiresAt } = grantTemporaryRole({
+          guildId: interaction.guild.id,
+          userId: applicantId,
+          roleId: tier.roleId,
+          durationMs: MEDIA_RANK_DURATION_MS,
+        }));
+      } catch (error) {
+        console.error(
+          `CRITICAL: granted ${tier.name} (${tier.roleId}) to ${applicantId} in guild ${interaction.guild.id} ` +
+          'but could not persist its expiration. The role is currently untracked and will NOT expire automatically:',
+          error,
+        );
+        statusNotes.push(
+          '\u26a0\ufe0f The expiration could not be saved, so this role is **untracked** and will not expire on its own. Remove it manually or re-run once storage is healthy.',
+        );
+      }
+
+      // 4. Acceptance DM, only after the role actually landed.
+      const acceptanceEmbed = buildMediaAcceptanceEmbed({ tier, displayName: applicantMember.displayName });
+      try {
+        await applicantMember.send({
+          content: `${userMention(applicantId)}`,
+          embeds: [acceptanceEmbed],
+          allowedMentions: { users: [applicantId] },
+        });
+      } catch (error) {
+        console.error('Failed to DM the media acceptance embed:', error);
+        statusNotes.push('\u26a0\ufe0f Their DMs are closed, so the acceptance message could not be delivered.');
+      }
+
+      // 5. Optional public announcement.
+      if (shouldAnnounce) {
+        const announcementChannel = await resolveGuildTextChannel(interaction.guild, MEDIA_ANNOUNCEMENT_CHANNEL_ID);
+        if (announcementChannel) {
+          try {
+            await announcementChannel.send({
+              content: `${roleMention(MEDIA_ANNOUNCEMENT_ROLE_ID)}`,
+              embeds: [buildMediaAnnouncementEmbed({ applicantId, tier })],
+              allowedMentions: { roles: [MEDIA_ANNOUNCEMENT_ROLE_ID] },
+            });
+          } catch (error) {
+            console.error('Failed to send the media rank announcement:', error);
+            statusNotes.push('\u26a0\ufe0f The announcement could not be posted.');
+          }
+        } else {
+          statusNotes.push('\u26a0\ufe0f The announcement channel could not be resolved.');
+        }
+      }
+
+      const expirySummary = expiresAt ?
+        `It expires <t:${Math.floor(expiresAt.getTime() / 1000)}:R>.` :
+        'Its expiration is not being tracked.';
+
+      await interaction.editReply(
+        [`Granted **${tier.name}** to <@${applicantId}>. ${expirySummary}`, ...statusNotes].join('\n'),
+      );
+      return;
+    }
+
     if (interaction.commandName === 'ban') {
       if (!isAuthorized(interaction)) {
         await interaction.reply({
@@ -1501,6 +1988,85 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new ActionRowBuilder().addComponents(positionInput),
         new ActionRowBuilder().addComponents(reasonInput),
         new ActionRowBuilder().addComponents(expInput),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === MEDIA_BUTTON_ID) {
+    // A select menu cannot live inside a modal, so the tier is chosen first and
+    // then carried into the modal through its custom id.
+    const tierSelect = new StringSelectMenuBuilder()
+      .setCustomId(MEDIA_TIER_SELECT_ID)
+      .setPlaceholder('Select the media rank you are applying for')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        Object.values(MEDIA_TIERS).map((tier) => ({
+          label: tier.applicationLabel,
+          value: tier.key,
+          emoji: tier.emoji,
+        })),
+      );
+
+    await interaction.reply({
+      content: '\ud83c\udfac Which media rank are you applying for?',
+      components: [new ActionRowBuilder().addComponents(tierSelect)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.isStringSelectMenu() && interaction.customId === MEDIA_TIER_SELECT_ID) {
+    const selectedTier = MEDIA_TIERS[interaction.values[0]];
+
+    if (!selectedTier) {
+      await interaction.reply({
+        content: 'That media rank is not available. Please try again.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${MEDIA_MODAL_ID}:${selectedTier.key}`)
+      .setTitle(`${selectedTier.applicationLabel} Application`.slice(0, 45));
+
+    const nameInput = new TextInputBuilder()
+      .setCustomId('applicant_name')
+      .setLabel('What is your name?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(50);
+
+    const ageInput = new TextInputBuilder()
+      .setCustomId('applicant_age')
+      .setLabel('How old are you?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(3);
+
+    const videoInput = new TextInputBuilder()
+      .setCustomId('applicant_video')
+      .setLabel("Link for the video you're applying with")
+      .setPlaceholder('https://...')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(500);
+
+    const notesInput = new TextInputBuilder()
+      .setCustomId('applicant_notes')
+      .setLabel('Additional notes')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setMaxLength(1000);
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(ageInput),
+        new ActionRowBuilder().addComponents(videoInput),
+        new ActionRowBuilder().addComponents(notesInput),
     );
 
     await interaction.showModal(modal);
@@ -1972,6 +2538,128 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
   }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${MEDIA_MODAL_ID}:`)) {
+    if (!interaction.inGuild() || !interaction.guild) {
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: 'This form can only be submitted inside a server.',
+      });
+      return;
+    }
+
+    const tier = MEDIA_TIERS[interaction.customId.slice(MEDIA_MODAL_ID.length + 1)];
+    if (!tier) {
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: 'That media rank is not available. Please start a new application.',
+      });
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('applicant_name').trim();
+    const age = interaction.fields.getTextInputValue('applicant_age').trim();
+    const videoUrl = interaction.fields.getTextInputValue('applicant_video').trim();
+    const notes = interaction.fields.getTextInputValue('applicant_notes').trim();
+
+    // Server side validation: the modal's own constraints are not trusted.
+    if (!name) {
+      await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Please provide your name.' });
+      return;
+    }
+
+    const parsedAge = Number.parseInt(age, 10);
+    if (!/^\d{1,3}$/.test(age) || !Number.isInteger(parsedAge) || parsedAge < 13 || parsedAge > 120) {
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: 'Please provide a valid age between 13 and 120.',
+      });
+      return;
+    }
+
+    let parsedVideoUrl = null;
+    try {
+      parsedVideoUrl = new URL(videoUrl);
+    } catch (error) {
+      parsedVideoUrl = null;
+    }
+
+    if (!parsedVideoUrl || !['http:', 'https:'].includes(parsedVideoUrl.protocol)) {
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: 'Please provide a valid video link starting with `http://` or `https://`.',
+      });
+      return;
+    }
+
+    const existingChannel = findExistingMediaTicketChannel(interaction.guild, interaction.user.id);
+    if (existingChannel) {
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: `You already have an open media application channel: ${existingChannel}`,
+      });
+      return;
+    }
+
+    const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
+    const channelName = getUniqueMediaChannelName(interaction.guild, usernamePart);
+
+    try {
+      const applicationChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        topic: `${MEDIA_TOPIC_PREFIX}${interaction.user.id}:status:open:tier:${tier.key}`,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ],
+        reason: `Media application submitted by ${interaction.user.tag}`,
+      });
+
+      const applicationEmbed = buildMediaApplicationEmbed({
+        applicantId: interaction.user.id,
+        name,
+        age,
+        videoUrl,
+        tier,
+        notes,
+      });
+
+      await applicationChannel.send({
+        content: `${userMention(MEDIA_REVIEWER_USER_ID)}`,
+        embeds: [applicationEmbed],
+        allowedMentions: { users: [MEDIA_REVIEWER_USER_ID] },
+      });
+      await applicationChannel.send({
+        content: `Hey there <@${interaction.user.id}>!\n\nThanks for applying for the **${tier.name}**!\n\n` +
+          'Please post your proof of views here so our team can review your application.',
+      });
+
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: `Thanks for applying, ${name}! I created ${applicationChannel} for your media application.`,
+      });
+    } catch (error) {
+      console.error('Failed to create media application channel:', error);
+      await interaction.reply({
+        flags: MessageFlags.Ephemeral,
+        content: 'Your form was received, but I could not create the channel. Check my channel permissions.',
+      });
+    }
+    return;
+  }
+
   if(interaction.isChatInputCommand() && interaction.commandName === 'accept') {
     if (!isAuthorized(interaction)) {
       return;
@@ -1995,10 +2683,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
-    const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
+    const ticketType = getTicketTypeFromChannel(interaction.channel);
 
-    if (!isActorChannel && !isBuilderChannel) {
+    if (!ticketType?.supportsAccept) {
       await interaction.reply({
         content: 'This command can only be used in actor or builder application channels.',
         flags: MessageFlags.Ephemeral,
@@ -2006,8 +2693,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const roleId = isActorChannel ? ACTOR_ROLE_ID : BUILDER_ROLE_ID;
-    const programLabel = isActorChannel ? 'Actor' : 'Builder';
+    const roleId = ticketType.acceptRoleId;
+    const programLabel = ticketType.label;
     const role = interaction.guild.roles.cache.get(roleId);
 
     if (!role) {
@@ -2074,29 +2761,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     const applicantId = getApplicantIdFromChannel(interaction.channel);
+    const ticketType = getTicketTypeFromChannel(interaction.channel);
+
     if (!applicantId) {
-      await interaction.reply('Could not find applicant ID. Make sure this command is run in an actor or builder application channel.');
+      await interaction.reply({
+        content: 'Could not find applicant ID. Make sure this command is run in an application channel.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
-    const isActorChannel = interaction.channel.topic?.startsWith(ACTOR_TOPIC_PREFIX);
-    const isBuilderChannel = interaction.channel.topic?.startsWith(BUILDER_TOPIC_PREFIX);
-
-    if (!isActorChannel && !isBuilderChannel) {
-      await interaction.reply('This command can only be used in actor or builder application channels.');
+    if (!ticketType?.supportsReject) {
+      await interaction.reply({
+        content: 'This command can only be used in actor, builder or media application channels.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
+
+    await interaction.reply({
+      content: `Rejecting this ${ticketType.label} application and closing the ticket.`,
+      flags: MessageFlags.Ephemeral,
+    });
 
     try {
       const applicantMember = await interaction.guild.members.fetch(applicantId);
       const dmChannel = await applicantMember.createDM();
-      const roleType = isActorChannel ? 'Actor' : 'Builder';
-      await dmChannel.send(`Your ${roleType} application in Island SMP has been rejected. Thank you for your interest!`);
+      await dmChannel.send(`Your ${ticketType.label} application in Island SMP has been rejected. Thank you for your interest!`);
     } catch (error) {
       console.error('Failed to send DM to applicant:', error);
     }
 
-    await interaction.guild.channels.delete(interaction.channelId);
+    try {
+      await interaction.guild.channels.delete(interaction.channelId);
+    } catch (error) {
+      console.error('Failed to delete rejected application channel:', error);
+    }
+    return;
   }
   if(interaction.isChatInputCommand() && interaction.commandName === 'close') {
     if (!isAuthorized(interaction)) {
@@ -2328,6 +3029,31 @@ client.on(Events.MessageCreate, async (message) => {
 
     await message.channel.send({ embeds: [staffEmbed], components: [staffButtonRow] });
     await message.channel.send({ embeds: [teamEmbed], components: [teamButtonRow] });
+    return;
+  }
+
+  if (normalizedContent === '~$postmediaembed') {
+    if (message.author.id !== ALLOWED_USER_ID) return;
+
+    try {
+      await message.delete();
+    } catch (error) {
+      console.error('Failed to delete the ~$postmediaembed trigger message:', error);
+    }
+
+    const mediaButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(MEDIA_BUTTON_ID)
+            .setLabel('Apply for Media')
+            .setEmoji('\ud83c\udfa5')
+            .setStyle(ButtonStyle.Primary),
+    );
+
+    await message.channel.send({
+      embeds: [buildMediaRankEmbed()],
+      components: [mediaButtonRow],
+      allowedMentions: { parse: [] },
+    });
     return;
   }
 
