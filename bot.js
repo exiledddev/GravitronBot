@@ -13,6 +13,7 @@ const {
   TextInputBuilder,
   ChatInputBuilder,
   StringSelectMenuBuilder,
+  GuildPremiumTier,
   TextInputStyle, roleMention, channelMention, userMention, MessageFlags,
 } = require('discord.js');
 const cron = require('node-cron');
@@ -22,6 +23,17 @@ const {
   processExpiredTemporaryRoles,
   startTemporaryRoleExpirationWorker,
 } = require('./temporary-roles');
+const {
+  initializeSceneStore,
+  isSceneStoreReady,
+  listScenes,
+  createScene,
+  getScene,
+  setCastMember,
+  removeCastMember,
+  listCast,
+  deleteSceneData,
+} = require('./scenes');
 const { version: BOT_VERSION } = require('./package.json');
 
 const token = process.env.DISCORD_TOKEN;
@@ -110,6 +122,28 @@ client.once(Events.ClientReady, async (readyClient) => {
     console.error('Failed to start the temporary role expiration system:', error);
   }
 
+  // Scene ticket storage. A failure here only costs /cast and /callsheet.
+  try {
+    initializeSceneStore();
+
+    // Channels deleted while the bot was offline never fired channelDelete, so
+    // reconcile once at startup the same way temporary roles recover.
+    let reconciledScenes = 0;
+    for (const scene of listScenes()) {
+      const sceneChannel = await readyClient.channels.fetch(scene.channel_id).catch(() => null);
+      if (!sceneChannel) {
+        deleteSceneData(scene.channel_id);
+        reconciledScenes += 1;
+      }
+    }
+
+    if (reconciledScenes > 0) {
+      console.log(`Scene startup reconciliation: dropped ${reconciledScenes} scene(s) whose channel no longer exists.`);
+    }
+  } catch (error) {
+    console.error('Failed to open the scene ticket store:', error);
+  }
+
   try {
     const startupChannel = await readyClient.channels.fetch(STARTUP_CHANNEL_ID);
     if (startupChannel?.isTextBased()) {
@@ -139,6 +173,7 @@ const STAFF_TOPIC_PREFIX = 'staff-app:user:';
 const TEAM_TOPIC_PREFIX = 'team-app:user:';
 const SUPPORT_TOPIC_PREFIX = 'support-ticket:user:';
 const MEDIA_TOPIC_PREFIX = 'media-app:user:';
+const SCENE_TOPIC_PREFIX = 'actor-project:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
 const ADMIN_ROLE_ID = '1503739527804616836';
 const ACTOR_ROLE_ID = '1503776275645337621';
@@ -195,6 +230,14 @@ const TICKET_TYPES = [
     supportsAccept: false,
     supportsReject: true,
     supportsExec: true,
+  },
+  {
+    key: 'scene',
+    label: 'Scene',
+    topicPrefix: SCENE_TOPIC_PREFIX,
+    supportsAccept: false,
+    supportsReject: false,
+    supportsExec: false,
   },
 ];
 const TICKET_STATS_TYPES = TICKET_TYPES;
@@ -339,6 +382,19 @@ const PROJECT_MEMBER_PERMISSION_OVERWRITE = {
   UseExternalEmojis: true,
   UseApplicationCommands: true,
 };
+// Actor project ("scene") tickets. They share the builder project category and
+// role, and are told apart by their channel topic prefix.
+const SCENE_CATEGORY_ID = PROJECT_CATEGORY_ID;
+const SCENE_SCRIPT_ALLOWED_CONTENT_TYPES = ['application/pdf'];
+const SCENE_SCRIPT_ALLOWED_EXTENSIONS = ['.pdf'];
+// Discord's per-guild upload ceiling. There is no helper for this on Guild, so
+// it is derived from the boost tier and used only for a clear error message -
+// the send itself is still wrapped in a try/catch.
+const SCENE_UPLOAD_LIMIT_BY_TIER = {
+  [GuildPremiumTier.Tier2]: 50 * 1024 * 1024,
+  [GuildPremiumTier.Tier3]: 100 * 1024 * 1024,
+};
+const SCENE_DEFAULT_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_READ_FIRST_CHANNEL_ID = '1546086278418927656';
 const ACCEPTED_QUESTIONS_CHANNEL_ID = '1546082814284533890';
 const HOW_JOIN_CHANNEL_ID = '1506390449516974280';
@@ -726,7 +782,67 @@ function isProjectChannel(channel) {
     return true;
   }
 
+  // Scene tickets share this category, so a topic that claims any other ticket
+  // type always beats the category fallback below.
+  if (getTicketTypeFromChannel(channel)) {
+    return false;
+  }
+
   return channel.parentId === PROJECT_CATEGORY_ID;
+}
+
+function isSceneChannel(channel) {
+  return (
+    channel?.type === ChannelType.GuildText &&
+    typeof channel.topic === 'string' &&
+    channel.topic.startsWith(SCENE_TOPIC_PREFIX)
+  );
+}
+
+function getUniqueSceneChannelName(guild, sceneName) {
+  const base = `\ud83c\udfacscene-${sanitizeProjectChannelName(sceneName)}`.slice(0, 100);
+  let candidate = base;
+  let index = 2;
+
+  while (guild.channels.cache.some((channel) => channel.name === candidate) && index < 100) {
+    const suffix = `-${index}`;
+    candidate = `${base.slice(0, 100 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function getGuildUploadLimitBytes(guild) {
+  return SCENE_UPLOAD_LIMIT_BY_TIER[guild?.premiumTier] ?? SCENE_DEFAULT_UPLOAD_LIMIT_BYTES;
+}
+
+/**
+ * Validate a scene script upload before anything is created, so a bad file never
+ * leaves an orphaned ticket behind.
+ */
+function validateSceneScript(attachment, guild) {
+  if (!attachment) {
+    return { ok: true, attachment: null };
+  }
+
+  const fileName = String(attachment.name || '');
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const hasAllowedType = SCENE_SCRIPT_ALLOWED_CONTENT_TYPES.some((type) => contentType.startsWith(type));
+  const hasAllowedExtension = SCENE_SCRIPT_ALLOWED_EXTENSIONS.some((ext) => fileName.toLowerCase().endsWith(ext));
+
+  // contentType can be absent, so the extension is accepted as a fallback.
+  if (!hasAllowedType && !hasAllowedExtension) {
+    return { ok: false, reason: `The script has to be a PDF. \`${truncateForEmbed(fileName, 100)}\` is not one.` };
+  }
+
+  const uploadLimit = getGuildUploadLimitBytes(guild);
+  if (attachment.size > uploadLimit) {
+    const limitMb = Math.floor(uploadLimit / (1024 * 1024));
+    return { ok: false, reason: `That script is larger than this server's ${limitMb}MB upload limit, so I cannot re-post it.` };
+  }
+
+  return { ok: true, attachment };
 }
 
 async function hasProjectRole(interaction) {
@@ -1166,6 +1282,70 @@ async function sendMediaRankExpirationDM({ member }) {
   await member.send({ embeds: [buildMediaExpirationEmbed()] });
 }
 
+function buildSceneDetailsEmbed({ sceneName, episode, director, deadline, scriptFileName, createdByTag }) {
+  const detailFields = [
+    { name: 'Episode / Chapter', value: truncateForEmbed(episode, 1024), inline: true },
+    { name: 'Scene Director', value: `<@${director}>`, inline: true },
+    { name: 'Deadline', value: truncateForEmbed(deadline || 'Not specified.', 1024), inline: true },
+  ];
+
+  if (scriptFileName) {
+    detailFields.push({ name: 'Script', value: truncateForEmbed(`\`${scriptFileName}\``, 1024), inline: false });
+  }
+
+  return new EmbedBuilder()
+    .setTitle(`${sceneName} \u2013 Scene Details`.slice(0, 256))
+    .setDescription('A new Island Realm scene ticket has been opened. Use `/cast` to cast someone in a part and `/callsheet` to read the cast back.')
+    .addFields(...detailFields)
+    .setColor(0x242429)
+    .setFooter({ text: `Created by ${createdByTag}` })
+    .setTimestamp();
+}
+
+function buildCastDMEmbed({ sceneName, roleName, episode, channelId }) {
+  return new EmbedBuilder()
+    .setTitle('\ud83c\udfad You have been cast!')
+    .setDescription(
+      [
+        `You are playing **${truncateForEmbed(roleName, 500)}** in **${truncateForEmbed(sceneName, 500)}**.`,
+        '',
+        `Head to ${channelMention(channelId)} for the script and the details.`,
+      ].join('\n'),
+    )
+    .addFields({ name: 'Episode / Chapter', value: truncateForEmbed(episode, 1024), inline: true })
+    .setColor(0x242429)
+    .setFooter({ text: 'Island Realm \u2013 Northstar Media' })
+    .setTimestamp();
+}
+
+/**
+ * The call sheet. Cast lines go in the description rather than in fields: an
+ * embed allows only 25 fields but 4096 description characters, which holds a far
+ * larger cast.
+ */
+function buildCallsheetEmbed({ scene, castLines, castCount }) {
+  const header = [
+    `**Episode / Chapter:** ${truncateForEmbed(scene.episode, 200)}`,
+    `**Scene Director:** <@${scene.director_id}>`,
+    `**Deadline:** ${truncateForEmbed(scene.deadline || 'Not specified.', 200)}`,
+  ];
+
+  if (scene.script_file_name) {
+    header.push(`**Script:** \`${truncateForEmbed(scene.script_file_name, 200)}\``);
+  }
+
+  const body = castLines.length ?
+    castLines.join('\n') :
+    '_No one is cast yet. Use_ `/cast` _to add someone._';
+
+  return new EmbedBuilder()
+    .setTitle(`${scene.name} \u2013 Call Sheet`.slice(0, 256))
+    .setDescription(truncateForEmbed([...header, '', `**Cast (${castCount})**`, body].join('\n'), 4096))
+    .setColor(0x242429)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` })
+    .setTimestamp();
+}
+
 function buildStartupEmbed(readyClient) {
   return new EmbedBuilder()
     .setTitle('\ud83d\udfe2 Northstar Utils Online')
@@ -1204,6 +1384,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           {
             name: 'Version',
             value: `Northstar Utils v${BOT_VERSION}`,
+          },
+          {
+            name: '\ud83c\udfac Scene tickets (NEW)',
+            value: '`/scene` opens an actor project ticket for a scene, with the script PDF attached to the command - the bot re-posts and pins it in the channel. `/cast` casts someone in a part, giving them channel access and DMing them, `/uncast` drops them again, and `/callsheet` lists everyone cast and the part they play. Scene tickets are counted in `/ticketstats`.',
           },
           {
             name: '\ud83c\udfac Media Rank system (NEW)',
@@ -1478,6 +1662,465 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'scene') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!(await hasProjectRole(interaction))) {
+        await interaction.reply({
+          content: `You need the ${roleMention(PROJECT_ROLE_ID)} role to use this command.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const sceneName = interaction.options.getString('name', true).trim();
+      const episode = interaction.options.getString('episode', true).trim();
+      const director = interaction.options.getUser('director') ?? interaction.user;
+      const deadline = interaction.options.getString('deadline')?.trim() || null;
+      const scriptAttachment = interaction.options.getAttachment('script');
+
+      if (!sceneName) {
+        await interaction.reply({
+          content: 'The scene name cannot be empty.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isSceneStoreReady()) {
+        await interaction.reply({
+          content: 'Scene storage is unavailable right now, so I cannot open a scene ticket. Try again shortly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      // Validated before anything is created so a bad upload never leaves an
+      // orphaned ticket behind.
+      const scriptCheck = validateSceneScript(scriptAttachment, interaction.guild);
+      if (!scriptCheck.ok) {
+        await interaction.reply({
+          content: scriptCheck.reason,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      let sceneCategory = interaction.guild.channels.cache.get(SCENE_CATEGORY_ID) ?? null;
+      if (!sceneCategory) {
+        sceneCategory = await interaction.guild.channels.fetch(SCENE_CATEGORY_ID).catch(() => null);
+      }
+
+      if (!sceneCategory || sceneCategory.type !== ChannelType.GuildCategory) {
+        await interaction.editReply('Could not find the project category. Check the configured category ID.');
+        return;
+      }
+
+      const permissionOverwrites = [
+        {
+          id: interaction.guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: director.id,
+          allow: PROJECT_MEMBER_PERMISSIONS,
+        },
+      ];
+
+      if (client.user?.id) {
+        permissionOverwrites.push({
+          id: client.user.id,
+          allow: [
+            ...PROJECT_MEMBER_PERMISSIONS,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageRoles,
+            // Needed to pin the script message.
+            PermissionFlagsBits.ManageMessages,
+          ],
+        });
+      }
+
+      let sceneChannel = null;
+      try {
+        sceneChannel = await interaction.guild.channels.create({
+          name: getUniqueSceneChannelName(interaction.guild, sceneName),
+          type: ChannelType.GuildText,
+          parent: sceneCategory.id,
+          topic: `${SCENE_TOPIC_PREFIX}${director.id}:status:open`,
+          permissionOverwrites,
+          reason: `Scene ticket "${sceneName}" created by ${interaction.user.tag}`,
+        });
+      } catch (error) {
+        console.error('Failed to create scene channel:', error);
+        await interaction.editReply('Failed to create the scene channel. Check my permissions and the category ID.');
+        return;
+      }
+
+      const statusNotes = [];
+
+      try {
+        createScene({
+          channelId: sceneChannel.id,
+          guildId: interaction.guild.id,
+          name: sceneName,
+          episode,
+          deadline,
+          directorId: director.id,
+          createdBy: interaction.user.id,
+          scriptFileName: scriptCheck.attachment?.name ?? null,
+        });
+      } catch (error) {
+        console.error(
+          `CRITICAL: created scene channel ${sceneChannel.id} but could not persist its details. ` +
+          '/cast and /callsheet will not work for it:',
+          error,
+        );
+        statusNotes.push('\u26a0\ufe0f The scene details could not be saved, so `/cast` and `/callsheet` will not work in it. Delete the channel and try again once storage is healthy.');
+      }
+
+      try {
+        await sceneChannel.send({
+          content: `<@${director.id}>`,
+          embeds: [
+            buildSceneDetailsEmbed({
+              sceneName,
+              episode,
+              director: director.id,
+              deadline,
+              scriptFileName: scriptCheck.attachment?.name ?? null,
+              createdByTag: interaction.user.tag,
+            }),
+          ],
+          allowedMentions: { users: [director.id] },
+        });
+      } catch (error) {
+        console.error('Failed to send scene details embed:', error);
+      }
+
+      if (scriptCheck.attachment) {
+        try {
+          // Re-uploaded rather than linked: Discord CDN attachment URLs are
+          // signed and expire, so the channel needs its own copy.
+          const scriptMessage = await sceneChannel.send({
+            content: '\ud83d\udcc4 **Scene script**',
+            files: [{ attachment: scriptCheck.attachment.url, name: scriptCheck.attachment.name }],
+          });
+
+          await scriptMessage.pin().catch((error) => {
+            console.error('Failed to pin the scene script message:', error);
+          });
+        } catch (error) {
+          console.error('Failed to post the scene script:', error);
+          statusNotes.push('\u26a0\ufe0f The script could not be posted. Upload it in the channel by hand.');
+        }
+      }
+
+      const sceneLogEmbed = new EmbedBuilder()
+        .setTitle('Action Report - Scene Ticket Created')
+        .setDescription(truncateForEmbed(
+          [
+            `**Scene Name:** ${sceneName}`,
+            `**Channel:** ${sceneChannel} (${sceneChannel.id})`,
+            `**Created By:** <@${interaction.user.id}> (${interaction.user.id})`,
+            `**Scene Director:** <@${director.id}> (${director.id})`,
+            '',
+            '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+            `**Episode / Chapter:** ${episode}`,
+            `**Deadline:** ${deadline || 'Not specified.'}`,
+            `**Script:** ${scriptCheck.attachment?.name || 'Not attached.'}`,
+          ].join('\n'),
+          4096,
+        ))
+        .setColor(0x242429)
+        .setTimestamp();
+
+      await sendAlertChannelEmbed(interaction.guild, sceneLogEmbed);
+
+      await interaction.editReply([`Scene ticket created: ${sceneChannel}`, ...statusNotes].join('\n'));
+      return;
+    }
+
+    if (interaction.commandName === 'cast') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isSceneChannel(interaction.channel)) {
+        await interaction.reply({
+          content: 'This command can only be used inside a scene ticket channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!(await hasProjectRole(interaction))) {
+        await interaction.reply({
+          content: `You need the ${roleMention(PROJECT_ROLE_ID)} role to use this command.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      if (!isSceneStoreReady()) {
+        await interaction.reply({
+          content: 'Scene storage is unavailable right now, so I cannot do that. Try again shortly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const targetUser = interaction.options.getUser('user', true);
+      const roleName = interaction.options.getString('role', true).trim();
+
+      if (!roleName) {
+        await interaction.reply({
+          content: 'The part cannot be empty.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply();
+
+      const scene = getScene(interaction.channelId);
+      if (!scene) {
+        await interaction.editReply('I have no record of this scene, so I cannot track its cast. It may have been created before the scene system existed.');
+        return;
+      }
+
+      let targetMember = null;
+      try {
+        targetMember = await interaction.guild.members.fetch(targetUser.id);
+      } catch (error) {
+        console.error('Failed to fetch member for /cast:', error);
+        await interaction.editReply('That user is not a member of this server.');
+        return;
+      }
+
+      // Access first: if the row write then fails, they still have the channel
+      // and the failure is loud, rather than a cast entry for someone locked out.
+      try {
+        await interaction.channel.permissionOverwrites.edit(
+          targetMember.id,
+          PROJECT_MEMBER_PERMISSION_OVERWRITE,
+          { reason: `Cast in this scene by ${interaction.user.tag}` },
+        );
+      } catch (error) {
+        console.error('Failed to grant scene channel access:', error);
+        await interaction.editReply('Failed to give that user access to this ticket. Check my permissions. Nobody was cast.');
+        return;
+      }
+
+      let castResult = null;
+      try {
+        castResult = setCastMember({
+          channelId: interaction.channelId,
+          guildId: interaction.guild.id,
+          userId: targetMember.id,
+          roleName,
+          addedBy: interaction.user.id,
+        });
+      } catch (error) {
+        console.error(
+          `CRITICAL: gave ${targetMember.id} access to scene ${interaction.channelId} but could not record the cast entry:`,
+          error,
+        );
+        await interaction.editReply(`Gave <@${targetMember.id}> access, but the cast entry could not be saved, so they will not show on the call sheet.`);
+        return;
+      }
+
+      const statusNotes = [];
+      try {
+        await targetMember.send({
+          embeds: [
+            buildCastDMEmbed({
+              sceneName: scene.name,
+              roleName,
+              episode: scene.episode,
+              channelId: interaction.channelId,
+            }),
+          ],
+        });
+      } catch (error) {
+        console.error('Failed to DM a newly cast member:', error);
+        statusNotes.push('\u26a0\ufe0f Their DMs are closed, so they were not notified.');
+      }
+
+      const castLine = castResult.wasUpdate ?
+        `Recast <@${targetMember.id}> as **${truncateForEmbed(roleName, 200)}** (was **${truncateForEmbed(castResult.previousRoleName, 200)}**).` :
+        `Cast <@${targetMember.id}> as **${truncateForEmbed(roleName, 200)}**.`;
+
+      await interaction.editReply({
+        content: [castLine, ...statusNotes].join('\n'),
+        allowedMentions: { users: [targetMember.id] },
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'uncast') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isSceneChannel(interaction.channel)) {
+        await interaction.reply({
+          content: 'This command can only be used inside a scene ticket channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!(await hasProjectRole(interaction))) {
+        await interaction.reply({
+          content: `You need the ${roleMention(PROJECT_ROLE_ID)} role to use this command.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      if (!isSceneStoreReady()) {
+        await interaction.reply({
+          content: 'Scene storage is unavailable right now, so I cannot do that. Try again shortly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const targetUser = interaction.options.getUser('user', true);
+
+      await interaction.deferReply();
+
+      let removedCastMember = null;
+      try {
+        removedCastMember = removeCastMember(interaction.channelId, targetUser.id);
+      } catch (error) {
+        console.error('Failed to remove a cast entry:', error);
+        await interaction.editReply('Could not read the cast for this scene. Nobody was removed.');
+        return;
+      }
+
+      if (!removedCastMember) {
+        await interaction.editReply(`<@${targetUser.id}> is not in this scene's cast.`);
+        return;
+      }
+
+      const statusNotes = [];
+      // The director keeps access to their own scene even when they were cast in
+      // a part, so uncasting them never locks them out.
+      const directorId = getApplicantIdFromChannel(interaction.channel);
+
+      if (targetUser.id === directorId) {
+        statusNotes.push('They are the scene director, so they keep access to the channel.');
+      } else {
+        try {
+          await interaction.channel.permissionOverwrites.delete(
+            targetUser.id,
+            `Removed from the cast by ${interaction.user.tag}`,
+          );
+        } catch (error) {
+          console.error('Failed to revoke scene channel access:', error);
+          statusNotes.push('\u26a0\ufe0f I could not revoke their channel access, so remove it by hand.');
+        }
+      }
+
+      await interaction.editReply({
+        content: [
+          `Removed <@${targetUser.id}> from the cast (was **${truncateForEmbed(removedCastMember.role_name, 200)}**).`,
+          ...statusNotes,
+        ].join('\n'),
+        allowedMentions: { users: [targetUser.id] },
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'callsheet') {
+      if (!interaction.inGuild() || !interaction.guild) {
+        await interaction.reply({
+          content: 'This command can only be used inside a server.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isSceneChannel(interaction.channel)) {
+        await interaction.reply({
+          content: 'This command can only be used inside a scene ticket channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!isSceneStoreReady()) {
+        await interaction.reply({
+          content: 'Scene storage is unavailable right now, so I cannot do that. Try again shortly.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.deferReply();
+
+      const scene = getScene(interaction.channelId);
+      if (!scene) {
+        await interaction.editReply('I have no record of this scene, so there is no call sheet for it.');
+        return;
+      }
+
+      let castMembers = [];
+      try {
+        castMembers = listCast(interaction.channelId);
+      } catch (error) {
+        console.error('Failed to read the scene cast:', error);
+        await interaction.editReply('Could not read the cast for this scene.');
+        return;
+      }
+
+      const castLines = [];
+      for (const castMember of castMembers) {
+        // A departed actor should still read as a name rather than a broken mention.
+        let label = `<@${castMember.user_id}>`;
+        try {
+          await interaction.guild.members.fetch(castMember.user_id);
+        } catch (error) {
+          let departedUser = null;
+          try {
+            departedUser = await client.users.fetch(castMember.user_id);
+          } catch (fetchError) {
+            departedUser = null;
+          }
+
+          label = `${formatUserLabel(departedUser)} (left the server)`;
+        }
+
+        castLines.push(`\u2022 ${label} \u2014 **${truncateForEmbed(castMember.role_name, 200)}**`);
+      }
+
+      await interaction.editReply({
+        embeds: [buildCallsheetEmbed({ scene, castLines, castCount: castMembers.length })],
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
     if (interaction.commandName === 'padd') {
       if (!interaction.inGuild() || !interaction.guild) {
         await interaction.reply({
@@ -1489,7 +2132,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (!isProjectChannel(interaction.channel)) {
         await interaction.reply({
-          content: 'This command can only be used inside a project (builder) ticket channel.',
+          content: isSceneChannel(interaction.channel) ?
+            'This is a scene ticket. Use `/cast` instead, so the part they are playing gets recorded.' :
+            'This command can only be used inside a project (builder) ticket channel.',
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -2954,6 +3599,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x242429);
 
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral});
+  }
+});
+
+client.on(Events.ChannelDelete, async (channel) => {
+  // Keep the scene store from accumulating rows for channels that no longer exist.
+  if (!channel?.id) {
+    return;
+  }
+
+  try {
+    const removed = deleteSceneData(channel.id);
+    if (removed.sceneRemoved > 0 || removed.castRemoved > 0) {
+      console.log(
+        `Cleaned up scene data for deleted channel ${channel.id}: ${removed.sceneRemoved} scene, ${removed.castRemoved} cast entries.`,
+      );
+    }
+  } catch (error) {
+    console.error('Failed to clean up scene data for a deleted channel:', error);
   }
 });
 
