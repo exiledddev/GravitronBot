@@ -11,32 +11,22 @@
  * any future temporary role can reuse it via grantTemporaryRole().
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-const Database = require('better-sqlite3');
+const { getDefaultDatabasePath, openSharedDatabase, closeSharedDatabase } = require('./storage');
 
-const DEFAULT_DATABASE_PATH = path.join(__dirname, 'data', 'northstar-utils.sqlite');
 const DEFAULT_EXPIRATION_INTERVAL_MS = 60 * 1000;
 
 let database = null;
+let databaseFilePath = null;
 let expirationTimer = null;
 let isProcessingExpirations = false;
 
-function getDatabasePath() {
-  return process.env.TEMPORARY_ROLE_DB_PATH || DEFAULT_DATABASE_PATH;
-}
-
-function initializeTemporaryRoleStore(databasePath = getDatabasePath()) {
+function initializeTemporaryRoleStore(databasePath = getDefaultDatabasePath()) {
   if (database) {
     return database;
   }
 
-  if (databasePath !== ':memory:') {
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  }
-
-  database = new Database(databasePath);
-  database.pragma('journal_mode = WAL');
+  databaseFilePath = databasePath;
+  database = openSharedDatabase(databasePath);
   database.exec(`
     CREATE TABLE IF NOT EXISTS temporary_media_roles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,8 +242,9 @@ function closeTemporaryRoleStore() {
   stopTemporaryRoleExpirationWorker();
 
   if (database) {
-    database.close();
+    closeSharedDatabase(databaseFilePath);
     database = null;
+    databaseFilePath = null;
   }
 }
 

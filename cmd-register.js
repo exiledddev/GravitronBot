@@ -105,6 +105,74 @@ const commands = [
       .toJSON(),
 
   new SlashCommandBuilder()
+      .setName('scene')
+      .setDescription('Create a new actor project (scene) ticket.')
+      .addStringOption((option) =>
+        option
+          .setName('name')
+          .setDescription('Scene name.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('episode')
+          .setDescription('Episode/Chapter the scene is for in the Island Realm series.')
+          .setRequired(true),
+      )
+      .addAttachmentOption((option) =>
+        option
+          .setName('script')
+          .setDescription('The scene script as a PDF.')
+          .setRequired(false),
+      )
+      .addUserOption((option) =>
+        option
+          .setName('director')
+          .setDescription('Scene Director (defaults to you).')
+          .setRequired(false),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('deadline')
+          .setDescription('Scene deadline.')
+          .setRequired(false),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('cast')
+      .setDescription('Cast a user in a part in this scene ticket.')
+      .addUserOption((option) =>
+        option
+          .setName('user')
+          .setDescription('User to cast.')
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('role')
+          .setDescription('The part they are playing.')
+          .setRequired(true),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('uncast')
+      .setDescription('Remove a user from this scene ticket\'s cast.')
+      .addUserOption((option) =>
+        option
+          .setName('user')
+          .setDescription('User to remove from the cast.')
+          .setRequired(true),
+      )
+      .toJSON(),
+
+  new SlashCommandBuilder()
+      .setName('callsheet')
+      .setDescription('Show everyone cast in this scene and the part they play.')
+      .toJSON(),
+
+  new SlashCommandBuilder()
       .setName('event')
       .setDescription('Announce a recording event and automatically announce it again when it starts.')
       .addStringOption((option) =>
