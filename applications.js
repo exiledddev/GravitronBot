@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Persistence for the conversational actor application.
+ * Persistence for the conversational Trusted application.
  *
  * The questionnaire is a state machine that has to survive a restart, so the
  * current step, the assigned audition piece and every answer so far live in
@@ -26,6 +26,36 @@ function getMediaRoot() {
   return process.env.APPLICATION_MEDIA_PATH || path.join(__dirname, 'data', 'applications');
 }
 
+/**
+ * The application used to be called the Actor application. Rename the tables in
+ * place rather than starting fresh, so in-progress applications and active
+ * cooldowns survive the rename. A fresh database skips this entirely.
+ */
+function migrateLegacyActorTables(db) {
+  const tableExists = (name) => Boolean(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name),
+  );
+
+  const renames = [
+    ['actor_applications', 'trusted_applications'],
+    ['actor_application_blocks', 'trusted_application_blocks'],
+  ];
+
+  for (const [legacyName, currentName] of renames) {
+    if (tableExists(legacyName) && !tableExists(currentName)) {
+      db.exec(`ALTER TABLE ${legacyName} RENAME TO ${currentName}`);
+      console.log(`Renamed ${legacyName} to ${currentName}.`);
+    }
+  }
+
+  // SQLite carries indexes across a table rename but keeps their old names, so
+  // drop the stale ones and let the schema below recreate them.
+  db.exec(`
+    DROP INDEX IF EXISTS actor_applications_status;
+    DROP INDEX IF EXISTS actor_applications_applicant;
+  `);
+}
+
 function initializeApplicationStore(databasePath = getDefaultDatabasePath()) {
   if (database) {
     return database;
@@ -33,8 +63,9 @@ function initializeApplicationStore(databasePath = getDefaultDatabasePath()) {
 
   databaseFilePath = databasePath;
   database = openSharedDatabase(databasePath);
+  migrateLegacyActorTables(database);
   database.exec(`
-    CREATE TABLE IF NOT EXISTS actor_applications (
+    CREATE TABLE IF NOT EXISTS trusted_applications (
       channel_id TEXT PRIMARY KEY,
       guild_id TEXT NOT NULL,
       applicant_id TEXT NOT NULL,
@@ -52,12 +83,12 @@ function initializeApplicationStore(databasePath = getDefaultDatabasePath()) {
       submitted_at TEXT
     );
 
-    CREATE INDEX IF NOT EXISTS actor_applications_status
-      ON actor_applications (status);
-    CREATE INDEX IF NOT EXISTS actor_applications_applicant
-      ON actor_applications (guild_id, applicant_id);
+    CREATE INDEX IF NOT EXISTS trusted_applications_status
+      ON trusted_applications (status);
+    CREATE INDEX IF NOT EXISTS trusted_applications_applicant
+      ON trusted_applications (guild_id, applicant_id);
 
-    CREATE TABLE IF NOT EXISTS actor_application_blocks (
+    CREATE TABLE IF NOT EXISTS trusted_application_blocks (
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       reason TEXT,
@@ -107,7 +138,7 @@ function createApplication({ channelId, guildId, applicantId, applicantTag, refe
   const now = new Date().toISOString();
 
   db.prepare(`
-    INSERT INTO actor_applications (
+    INSERT INTO trusted_applications (
       channel_id, guild_id, applicant_id, applicant_tag, reference, status,
       current_step, editing_step, audition_key, answers, prompt_message_id,
       created_at, updated_at, reminded_at, submitted_at
@@ -142,14 +173,14 @@ function createApplication({ channelId, guildId, applicantId, applicantTag, refe
 }
 
 function getApplication(channelId) {
-  return hydrate(requireDatabase().prepare('SELECT * FROM actor_applications WHERE channel_id = ?').get(channelId));
+  return hydrate(requireDatabase().prepare('SELECT * FROM trusted_applications WHERE channel_id = ?').get(channelId));
 }
 
 function listApplications(status) {
   const db = requireDatabase();
   const rows = status ?
-    db.prepare('SELECT * FROM actor_applications WHERE status = ? ORDER BY created_at ASC').all(status) :
-    db.prepare('SELECT * FROM actor_applications ORDER BY created_at ASC').all();
+    db.prepare('SELECT * FROM trusted_applications WHERE status = ? ORDER BY created_at ASC').all(status) :
+    db.prepare('SELECT * FROM trusted_applications ORDER BY created_at ASC').all();
 
   return rows.map(hydrate);
 }
@@ -168,7 +199,7 @@ function recordAnswer({ channelId, questionKey, answer, nextStep, status }) {
   const answers = { ...existing.answers, [questionKey]: answer };
 
   db.prepare(`
-    UPDATE actor_applications
+    UPDATE trusted_applications
     SET answers = @answers,
         current_step = @nextStep,
         editing_step = NULL,
@@ -196,7 +227,7 @@ function setApplicationState(channelId, { status, currentStep, editingStep, prom
   }
 
   db.prepare(`
-    UPDATE actor_applications
+    UPDATE trusted_applications
     SET status = @status,
         current_step = @currentStep,
         editing_step = @editingStep,
@@ -221,7 +252,7 @@ function setApplicationState(channelId, { status, currentStep, editingStep, prom
 
 function deleteApplication(channelId) {
   const removed = requireDatabase()
-    .prepare('DELETE FROM actor_applications WHERE channel_id = ?')
+    .prepare('DELETE FROM trusted_applications WHERE channel_id = ?')
     .run(channelId).changes;
 
   removeApplicationMedia(channelId);
@@ -292,7 +323,7 @@ function blockApplicant({ guildId, userId, reason, durationMs }) {
   const expiresAt = new Date(blockedAt.getTime() + durationMs);
 
   db.prepare(`
-    INSERT INTO actor_application_blocks (guild_id, user_id, reason, blocked_at, expires_at)
+    INSERT INTO trusted_application_blocks (guild_id, user_id, reason, blocked_at, expires_at)
     VALUES (@guildId, @userId, @reason, @blockedAt, @expiresAt)
     ON CONFLICT (guild_id, user_id) DO UPDATE SET
       reason = excluded.reason,
@@ -315,14 +346,14 @@ function blockApplicant({ guildId, userId, reason, durationMs }) {
  */
 function getApplicantBlock(guildId, userId) {
   const db = requireDatabase();
-  const row = db.prepare('SELECT * FROM actor_application_blocks WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
+  const row = db.prepare('SELECT * FROM trusted_application_blocks WHERE guild_id = ? AND user_id = ?').get(guildId, userId);
 
   if (!row) {
     return null;
   }
 
   if (new Date(row.expires_at).getTime() <= Date.now()) {
-    db.prepare('DELETE FROM actor_application_blocks WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
+    db.prepare('DELETE FROM trusted_application_blocks WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
     return null;
   }
 
@@ -331,7 +362,7 @@ function getApplicantBlock(guildId, userId) {
 
 function clearApplicantBlock(guildId, userId) {
   return requireDatabase()
-    .prepare('DELETE FROM actor_application_blocks WHERE guild_id = ? AND user_id = ?')
+    .prepare('DELETE FROM trusted_application_blocks WHERE guild_id = ? AND user_id = ?')
     .run(guildId, userId).changes;
 }
 

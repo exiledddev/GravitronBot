@@ -161,7 +161,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     console.error('Failed to open the scene ticket store:', error);
   }
 
-  // Actor application storage. A failure here only costs the questionnaire.
+  // Trusted application storage. A failure here only costs the questionnaire.
   try {
     initializeApplicationStore();
 
@@ -186,7 +186,7 @@ client.once(Events.ClientReady, async (readyClient) => {
         null;
 
       if (!prompt) {
-        await postActorQuestion(channel, application, application.current_step).catch((error) => {
+        await postTrustedQuestion(channel, application, application.current_step).catch((error) => {
           console.error(`Failed to re-post question for application ${application.channel_id}:`, error);
         });
         repromptedApplications += 1;
@@ -195,18 +195,18 @@ client.once(Events.ClientReady, async (readyClient) => {
 
     if (repromptedApplications > 0 || reconciledApplications > 0) {
       console.log(
-        `Actor application startup recovery: re-prompted ${repromptedApplications}, dropped ${reconciledApplications} for missing channels.`,
+        `Trusted application startup recovery: re-prompted ${repromptedApplications}, dropped ${reconciledApplications} for missing channels.`,
       );
     }
 
-    await sweepStaleActorApplications(readyClient);
+    await sweepStaleTrustedApplications(readyClient);
     setInterval(() => {
-      sweepStaleActorApplications(readyClient).catch((error) => {
-        console.error('Actor application sweep failed:', error);
+      sweepStaleTrustedApplications(readyClient).catch((error) => {
+        console.error('Trusted application sweep failed:', error);
       });
-    }, ACTOR_APP_SWEEP_INTERVAL_MS);
+    }, TRUSTED_APP_SWEEP_INTERVAL_MS);
   } catch (error) {
-    console.error('Failed to start the actor application system:', error);
+    console.error('Failed to start the Trusted application system:', error);
   }
 
   try {
@@ -219,7 +219,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
 });
 
-const APPLY_BUTTON_ID = 'actor_apply_open';
+const APPLY_BUTTON_ID = 'trusted_apply_open';
+// Panels posted before the rename still carry the old ids, so they stay accepted.
+const LEGACY_APPLY_BUTTON_ID = 'actor_apply_open';
 const BUILDER_BUTTON_ID = 'builder_apply_open';
 const STAFF_BUTTON_ID = 'staff_apply_open';
 const TEAM_BUTTON_ID = 'team_apply_open';
@@ -231,12 +233,19 @@ const SUPPORT_MODAL_ID = 'support_ticket_form';
 const MEDIA_BUTTON_ID = 'media_apply_open';
 const MEDIA_TIER_SELECT_ID = 'media_apply_tier';
 const MEDIA_MODAL_ID = 'media_apply_form';
-const ACTOR_APP_DONE_ID = 'actor_app_done';
-const ACTOR_APP_EDIT_ID = 'actor_app_edit';
-const ACTOR_APP_EDIT_SELECT_ID = 'actor_app_edit_select';
-const ACTOR_APP_ACCEPT_ID = 'actor_app_accept';
-const ACTOR_APP_REJECT_ID = 'actor_app_reject';
-const ACTOR_TOPIC_PREFIX = 'actor-app:user:';
+const TRUSTED_APP_DONE_ID = 'trusted_app_done';
+const LEGACY_TRUSTED_APP_DONE_ID = 'actor_app_done';
+const TRUSTED_APP_EDIT_ID = 'trusted_app_edit';
+const LEGACY_TRUSTED_APP_EDIT_ID = 'actor_app_edit';
+const TRUSTED_APP_EDIT_SELECT_ID = 'trusted_app_edit_select';
+const LEGACY_TRUSTED_APP_EDIT_SELECT_ID = 'actor_app_edit_select';
+const TRUSTED_APP_ACCEPT_ID = 'trusted_app_accept';
+const LEGACY_TRUSTED_APP_ACCEPT_ID = 'actor_app_accept';
+const TRUSTED_APP_REJECT_ID = 'trusted_app_reject';
+const LEGACY_TRUSTED_APP_REJECT_ID = 'actor_app_reject';
+const TRUSTED_TOPIC_PREFIX = 'trusted-app:user:';
+// Tickets opened before the rename keep this topic and must stay recognisable.
+const LEGACY_TRUSTED_TOPIC_PREFIX = 'actor-app:user:';
 const BUILDER_TOPIC_PREFIX = 'builder-app:user:';
 const STAFF_TOPIC_PREFIX = 'staff-app:user:';
 const TEAM_TOPIC_PREFIX = 'team-app:user:';
@@ -245,19 +254,20 @@ const MEDIA_TOPIC_PREFIX = 'media-app:user:';
 const SCENE_TOPIC_PREFIX = 'actor-project:user:';
 const ALLOWED_USER_ID = '1273910593539014680';
 const ADMIN_ROLE_ID = '1503739527804616836';
-const ACTOR_ROLE_ID = '1503776275645337621';
+const TRUSTED_ROLE_ID = '1503776275645337621';
 const BUILDER_ROLE_ID = '1503778122275885121';
 // Structured ticket type definitions. Command availability is derived from this
 // registry rather than from ad-hoc per-command channel checks.
 const TICKET_TYPES = [
   {
-    // Actor applications are decided with the Accept / Reject buttons on the
+    // Trusted applications are decided with the Accept / Reject buttons on the
     // submission embed, so the slash commands deliberately do not apply here.
     // acceptRoleId stays because the Accept button reads it.
-    key: 'actor',
-    label: 'Actor',
-    topicPrefix: ACTOR_TOPIC_PREFIX,
-    acceptRoleId: ACTOR_ROLE_ID,
+    key: 'trusted',
+    label: 'Trusted',
+    topicPrefix: TRUSTED_TOPIC_PREFIX,
+    legacyTopicPrefixes: [LEGACY_TRUSTED_TOPIC_PREFIX],
+    acceptRoleId: TRUSTED_ROLE_ID,
     supportsAccept: false,
     supportsReject: false,
     supportsExec: false,
@@ -456,10 +466,10 @@ const PROJECT_MEMBER_PERMISSION_OVERWRITE = {
 };
 // Actor project ("scene") tickets. They share the builder project category and
 // role, and are told apart by their channel topic prefix.
-// Actor application ---------------------------------------------------------
+// Trusted application -------------------------------------------------------
 // One audition piece is assigned at random when the ticket opens and pinned for
 // the life of the application, so editing the answer re-shows the same piece.
-const ACTOR_AUDITION_TESTS = {
+const TRUSTED_AUDITION_TESTS = {
   jesse: {
     key: 'jesse',
     character: 'Jesse',
@@ -509,18 +519,21 @@ const ACTOR_AUDITION_TESTS = {
     ].join('\n'),
   },
 };
-const ACTOR_AUDIO_ALLOWED_CONTENT_TYPES = ['audio/', 'video/ogg'];
-const ACTOR_AUDIO_ALLOWED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm', '.mp4'];
-const ACTOR_MINIMUM_AGE = 16;
+const TRUSTED_AUDIO_ALLOWED_CONTENT_TYPES = ['audio/', 'video/ogg'];
+const TRUSTED_AUDIO_ALLOWED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm', '.mp4'];
+const TRUSTED_MINIMUM_AGE = 16;
 // Overridable so the questionnaire timers can be shortened while testing.
 function readDurationEnv(name, fallbackMs) {
-  const parsed = Number.parseInt(process.env[name] || '', 10);
+  // The ACTOR_ prefixed names predate the rename and are still honoured.
+  const legacyName = name.replace(/^TRUSTED_/, 'ACTOR_');
+  const raw = process.env[name] || process.env[legacyName] || '';
+  const parsed = Number.parseInt(raw, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallbackMs;
 }
-const ACTOR_APP_REMINDER_AFTER_MS = readDurationEnv('ACTOR_APP_REMINDER_AFTER_MS', 24 * 60 * 60 * 1000);
-const ACTOR_APP_ABANDON_AFTER_MS = readDurationEnv('ACTOR_APP_ABANDON_AFTER_MS', 72 * 60 * 60 * 1000);
-const ACTOR_APP_SWEEP_INTERVAL_MS = readDurationEnv('ACTOR_APP_SWEEP_INTERVAL_MS', 10 * 60 * 1000);
-const ACTOR_REAPPLY_COOLDOWN_MS = readDurationEnv('ACTOR_REAPPLY_COOLDOWN_MS', 7 * 24 * 60 * 60 * 1000);
+const TRUSTED_APP_REMINDER_AFTER_MS = readDurationEnv('TRUSTED_APP_REMINDER_AFTER_MS', 24 * 60 * 60 * 1000);
+const TRUSTED_APP_ABANDON_AFTER_MS = readDurationEnv('TRUSTED_APP_ABANDON_AFTER_MS', 72 * 60 * 60 * 1000);
+const TRUSTED_APP_SWEEP_INTERVAL_MS = readDurationEnv('TRUSTED_APP_SWEEP_INTERVAL_MS', 10 * 60 * 1000);
+const TRUSTED_REAPPLY_COOLDOWN_MS = readDurationEnv('TRUSTED_REAPPLY_COOLDOWN_MS', 7 * 24 * 60 * 60 * 1000);
 
 const SCENE_CATEGORY_ID = PROJECT_CATEGORY_ID;
 const SCENE_SCRIPT_ALLOWED_CONTENT_TYPES = ['application/pdf'];
@@ -720,8 +733,8 @@ function generateBanId() {
   return `${timestampPart}-${randomPart}`;
 }
 
-function getUniqueActorChannelName(guild, usernamePart) {
-  const base = `🎭actor-${usernamePart}`.slice(0, 100);
+function getUniqueTrustedChannelName(guild, usernamePart) {
+  const base = `🎭trusted-${usernamePart}`.slice(0, 100);
   let candidate = base;
   let index = 2;
 
@@ -790,14 +803,14 @@ function getUniqueSupportChannelName(guild, usernamePart) {
   return candidate;
 }
 
-function findExistingActorApplicationChannel(guild, userId) {
-  const marker = `${ACTOR_TOPIC_PREFIX}${userId}`;
+function findExistingTrustedApplicationChannel(guild, userId) {
+  const markers = [TRUSTED_TOPIC_PREFIX, LEGACY_TRUSTED_TOPIC_PREFIX].map((prefix) => `${prefix}${userId}`);
 
   return guild.channels.cache.find(
     (channel) =>
       channel.type === ChannelType.GuildText &&
       typeof channel.topic === 'string' &&
-      channel.topic.startsWith(marker),
+      markers.some((marker) => channel.topic.startsWith(marker)),
   );
 }
 
@@ -857,7 +870,9 @@ function getOpenTicketStats(guild) {
       continue;
     }
 
-    const matchingType = TICKET_STATS_TYPES.find((type) => channel.topic.startsWith(type.topicPrefix));
+    const matchingType = TICKET_STATS_TYPES.find(
+      (type) => getTicketTypePrefixes(type).some((prefix) => channel.topic.startsWith(prefix)),
+    );
     if (matchingType) {
       counts[matchingType.key] += 1;
     }
@@ -867,13 +882,51 @@ function getOpenTicketStats(guild) {
   return { counts, total };
 }
 
+/**
+ * Every prefix a ticket type answers to: its current one first, then any it was
+ * renamed away from, so channels opened before a rename still resolve.
+ */
+/**
+ * The ticket types a command applies to, as readable text, so refusal messages
+ * stay true as the registry changes.
+ */
+function describeTicketTypesFor(capability) {
+  const labels = TICKET_TYPES.filter((type) => type[capability]).map((type) => type.label.toLowerCase());
+  if (labels.length === 0) {
+    return 'no';
+  }
+
+  return labels.length === 1 ?
+    labels[0] :
+    `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}`;
+}
+
+function getTicketTypePrefixes(ticketType) {
+  return [ticketType.topicPrefix, ...(ticketType.legacyTopicPrefixes || [])];
+}
+
 function getTicketTypeFromChannel(channel) {
   const channelTopic = channel?.topic;
   if (typeof channelTopic !== 'string') {
     return null;
   }
 
-  return TICKET_TYPES.find((type) => channelTopic.startsWith(type.topicPrefix)) || null;
+  return TICKET_TYPES.find(
+    (type) => getTicketTypePrefixes(type).some((prefix) => channelTopic.startsWith(prefix)),
+  ) || null;
+}
+
+/**
+ * Which of a type's prefixes this channel actually uses. Parsing has to key off
+ * this rather than the current prefix, or a legacy ticket yields no applicant.
+ */
+function getMatchedTopicPrefix(channel, ticketType) {
+  const channelTopic = channel?.topic;
+  if (typeof channelTopic !== 'string' || !ticketType) {
+    return null;
+  }
+
+  return getTicketTypePrefixes(ticketType).find((prefix) => channelTopic.startsWith(prefix)) || null;
 }
 
 function getApplicantIdFromChannel(channel) {
@@ -883,7 +936,12 @@ function getApplicantIdFromChannel(channel) {
     return null;
   }
 
-  const topicMatch = channelTopic.match(new RegExp(`^${ticketType.topicPrefix}(\\d+)`));
+  const matchedPrefix = getMatchedTopicPrefix(channel, ticketType);
+  if (!matchedPrefix) {
+    return null;
+  }
+
+  const topicMatch = channelTopic.match(new RegExp(`^${matchedPrefix}(\\d+)`));
   return topicMatch ? topicMatch[1] : null;
 }
 
@@ -1485,8 +1543,8 @@ function buildCallsheetEmbed({ scene, castLines, castCount }) {
 }
 
 function pickAuditionTest() {
-  const keys = Object.keys(ACTOR_AUDITION_TESTS);
-  return ACTOR_AUDITION_TESTS[keys[Math.floor(Math.random() * keys.length)]];
+  const keys = Object.keys(TRUSTED_AUDITION_TESTS);
+  return TRUSTED_AUDITION_TESTS[keys[Math.floor(Math.random() * keys.length)]];
 }
 
 function generateApplicationReference() {
@@ -1499,8 +1557,8 @@ function isAudioAttachment(attachment) {
 
   // contentType can be absent, so the extension is accepted as a fallback.
   return (
-    ACTOR_AUDIO_ALLOWED_CONTENT_TYPES.some((type) => contentType.startsWith(type)) ||
-    ACTOR_AUDIO_ALLOWED_EXTENSIONS.some((ext) => fileName.endsWith(ext))
+    TRUSTED_AUDIO_ALLOWED_CONTENT_TYPES.some((type) => contentType.startsWith(type)) ||
+    TRUSTED_AUDIO_ALLOWED_EXTENSIONS.some((ext) => fileName.endsWith(ext))
   );
 }
 
@@ -1514,7 +1572,7 @@ function extractFirstUrl(text) {
  * driven entirely by this list - asking, re-asking on edit and rendering the
  * review all read from it.
  */
-const ACTOR_APPLICATION_QUESTIONS = [
+const TRUSTED_APPLICATION_QUESTIONS = [
   {
     key: 'minecraft_username',
     slot: null,
@@ -1554,8 +1612,8 @@ const ACTOR_APPLICATION_QUESTIONS = [
       return { ok: true, answer: { text, value: parsed } };
     },
     render: (answer) => (
-      answer.value < ACTOR_MINIMUM_AGE ?
-        `${answer.value} \u26a0\ufe0f **under ${ACTOR_MINIMUM_AGE}**` :
+      answer.value < TRUSTED_MINIMUM_AGE ?
+        `${answer.value} \u26a0\ufe0f **under ${TRUSTED_MINIMUM_AGE}**` :
         `${answer.value}`
     ),
   },
@@ -1618,15 +1676,15 @@ function validateAudioAnswer(message, guild) {
   return { ok: false, reason: 'Please upload an audio file, or reply with a link to your recording.' };
 }
 
-function buildActorQuestionEmbed(question, application) {
-  const stepNumber = ACTOR_APPLICATION_QUESTIONS.indexOf(question) + 1;
+function buildTrustedQuestionEmbed(question, application) {
+  const stepNumber = TRUSTED_APPLICATION_QUESTIONS.indexOf(question) + 1;
   const embed = new EmbedBuilder()
     .setTitle(`${question.emoji} ${question.title}`.slice(0, 256))
     .setColor(0x242429)
-    .setFooter({ text: `Question ${stepNumber} of ${ACTOR_APPLICATION_QUESTIONS.length} \u2022 ${application.reference}` });
+    .setFooter({ text: `Question ${stepNumber} of ${TRUSTED_APPLICATION_QUESTIONS.length} \u2022 ${application.reference}` });
 
   if (question.key === 'audition') {
-    const audition = ACTOR_AUDITION_TESTS[application.audition_key] ?? ACTOR_AUDITION_TESTS.jesse;
+    const audition = TRUSTED_AUDITION_TESTS[application.audition_key] ?? TRUSTED_AUDITION_TESTS.jesse;
     embed.setDescription(truncateForEmbed([
       question.instructions,
       '',
@@ -1642,8 +1700,8 @@ function buildActorQuestionEmbed(question, application) {
   return embed;
 }
 
-function buildActorApplicationSummaryEmbed({ application, applicantId, title, description, colour }) {
-  const fields = ACTOR_APPLICATION_QUESTIONS.map((question) => {
+function buildTrustedApplicationSummaryEmbed({ application, applicantId, title, description, colour }) {
+  const fields = TRUSTED_APPLICATION_QUESTIONS.map((question) => {
     const answer = application.answers[question.key];
     return {
       name: `${question.emoji} ${question.label}`,
@@ -1652,7 +1710,7 @@ function buildActorApplicationSummaryEmbed({ application, applicantId, title, de
     };
   });
 
-  const audition = ACTOR_AUDITION_TESTS[application.audition_key];
+  const audition = TRUSTED_AUDITION_TESTS[application.audition_key];
 
   return new EmbedBuilder()
     .setTitle(truncateForEmbed(title, 256))
@@ -1673,10 +1731,10 @@ function buildActorApplicationSummaryEmbed({ application, applicantId, title, de
  * Re-upload the stored voiceovers from disk. The originals live in messages that
  * get purged, and Discord CDN links expire, so disk is the only durable source.
  */
-function buildActorApplicationFiles(channelId) {
+function buildTrustedApplicationFiles(channelId) {
   const files = [];
 
-  for (const question of ACTOR_APPLICATION_QUESTIONS) {
+  for (const question of TRUSTED_APPLICATION_QUESTIONS) {
     if (!question.slot) {
       continue;
     }
@@ -1700,8 +1758,8 @@ async function downloadAttachmentBuffer(attachment) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-function isActorApplicationChannel(channel) {
-  return getTicketTypeFromChannel(channel)?.key === 'actor';
+function isTrustedApplicationChannel(channel) {
+  return getTicketTypeFromChannel(channel)?.key === 'trusted';
 }
 
 /**
@@ -1752,15 +1810,15 @@ async function purgeChannelExcept(channel, keepMessageId) {
  * Ask one question and remember which message carries it, so a restart can tell
  * whether the applicant is actually waiting on a prompt that never arrived.
  */
-async function postActorQuestion(channel, application, stepIndex) {
-  const question = ACTOR_APPLICATION_QUESTIONS[stepIndex];
+async function postTrustedQuestion(channel, application, stepIndex) {
+  const question = TRUSTED_APPLICATION_QUESTIONS[stepIndex];
   if (!question) {
     return null;
   }
 
   const prompt = await channel.send({
     content: `<@${application.applicant_id}>`,
-    embeds: [buildActorQuestionEmbed(question, application)],
+    embeds: [buildTrustedQuestionEmbed(question, application)],
     allowedMentions: { users: [application.applicant_id] },
   });
 
@@ -1773,16 +1831,16 @@ async function postActorQuestion(channel, application, stepIndex) {
   return prompt;
 }
 
-function buildActorReviewComponents() {
+function buildTrustedReviewComponents() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(ACTOR_APP_DONE_ID)
+        .setCustomId(TRUSTED_APP_DONE_ID)
         .setLabel('Done')
         .setEmoji('\u2705')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId(ACTOR_APP_EDIT_ID)
+        .setCustomId(TRUSTED_APP_EDIT_ID)
         .setLabel('Edit an answer')
         .setEmoji('\u270f\ufe0f')
         .setStyle(ButtonStyle.Secondary),
@@ -1790,16 +1848,16 @@ function buildActorReviewComponents() {
   ];
 }
 
-function buildActorDecisionComponents(applicantId) {
+function buildTrustedDecisionComponents(applicantId) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`${ACTOR_APP_ACCEPT_ID}:${applicantId}`)
+        .setCustomId(`${TRUSTED_APP_ACCEPT_ID}:${applicantId}`)
         .setLabel('Accept')
         .setEmoji('\u2705')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId(`${ACTOR_APP_REJECT_ID}:${applicantId}`)
+        .setCustomId(`${TRUSTED_APP_REJECT_ID}:${applicantId}`)
         .setLabel('Reject')
         .setEmoji('\u274c')
         .setStyle(ButtonStyle.Danger),
@@ -1807,8 +1865,8 @@ function buildActorDecisionComponents(applicantId) {
   ];
 }
 
-async function postActorReview(channel, application) {
-  const reviewEmbed = buildActorApplicationSummaryEmbed({
+async function postTrustedReview(channel, application) {
+  const reviewEmbed = buildTrustedApplicationSummaryEmbed({
     application,
     applicantId: application.applicant_id,
     title: '\ud83d\udcdd Check your application',
@@ -1819,8 +1877,8 @@ async function postActorReview(channel, application) {
   const message = await channel.send({
     content: `<@${application.applicant_id}>`,
     embeds: [reviewEmbed],
-    files: buildActorApplicationFiles(channel.id),
-    components: buildActorReviewComponents(),
+    files: buildTrustedApplicationFiles(channel.id),
+    components: buildTrustedReviewComponents(),
     allowedMentions: { users: [application.applicant_id] },
   });
 
@@ -1838,11 +1896,11 @@ async function postActorReview(channel, application) {
  * Record an answer and move the applicant along: next question, or the review
  * step when the questionnaire is finished (or when they were editing one answer).
  */
-async function advanceActorApplication(channel, application, question, answer) {
-  const stepIndex = ACTOR_APPLICATION_QUESTIONS.indexOf(question);
+async function advanceTrustedApplication(channel, application, question, answer) {
+  const stepIndex = TRUSTED_APPLICATION_QUESTIONS.indexOf(question);
   const wasEditing = application.editing_step !== null && application.editing_step !== undefined;
   const nextStep = wasEditing ? null : stepIndex + 1;
-  const isFinished = wasEditing || nextStep >= ACTOR_APPLICATION_QUESTIONS.length;
+  const isFinished = wasEditing || nextStep >= TRUSTED_APPLICATION_QUESTIONS.length;
 
   const updated = recordAnswer({
     channelId: channel.id,
@@ -1857,9 +1915,9 @@ async function advanceActorApplication(channel, application, question, answer) {
   }
 
   if (isFinished) {
-    await postActorReview(channel, updated);
+    await postTrustedReview(channel, updated);
   } else {
-    await postActorQuestion(channel, updated, nextStep);
+    await postTrustedQuestion(channel, updated, nextStep);
   }
 
   return updated;
@@ -1869,14 +1927,14 @@ async function advanceActorApplication(channel, application, question, answer) {
  * Finish an application: post the submission first so a failure can never leave
  * an empty channel, then purge, lock the applicant out and archive.
  */
-async function submitActorApplication(channel, application) {
+async function submitTrustedApplication(channel, application) {
   const applicantId = application.applicant_id;
   const notes = [];
 
-  const submissionEmbed = buildActorApplicationSummaryEmbed({
+  const submissionEmbed = buildTrustedApplicationSummaryEmbed({
     application,
     applicantId,
-    title: '\ud83c\udfad Actor Application',
+    title: '\ud83c\udfad Trusted Application',
     description: `Submitted by <@${applicantId}>. Use the buttons below to decide.`,
     colour: 0xFF0000,
   });
@@ -1884,8 +1942,8 @@ async function submitActorApplication(channel, application) {
   const submissionMessage = await channel.send({
     content: `${roleMention(ADMIN_ROLE_ID)}`,
     embeds: [submissionEmbed],
-    files: buildActorApplicationFiles(channel.id),
-    components: buildActorDecisionComponents(applicantId),
+    files: buildTrustedApplicationFiles(channel.id),
+    components: buildTrustedDecisionComponents(applicantId),
     allowedMentions: { roles: [ADMIN_ROLE_ID] },
   });
 
@@ -1896,7 +1954,7 @@ async function submitActorApplication(channel, application) {
     await channel.permissionOverwrites.edit(
       applicantId,
       { ViewChannel: false, SendMessages: false },
-      { reason: 'Actor application submitted.' },
+      { reason: 'Trusted application submitted.' },
     );
   } catch (error) {
     console.error('Failed to revoke applicant access after submission:', error);
@@ -1906,7 +1964,7 @@ async function submitActorApplication(channel, application) {
   // Archive to the alert channel with the id and username, so the recordings
   // outlive the ticket and the applicant stays findable.
   const archiveEmbed = new EmbedBuilder()
-    .setTitle('Action Report - Actor Application Submitted')
+    .setTitle('Action Report - Trusted Application Submitted')
     .setDescription(truncateForEmbed([
       `**Reference:** ${application.reference}`,
       `**Applicant:** <@${applicantId}> (${applicantId})`,
@@ -1914,7 +1972,7 @@ async function submitActorApplication(channel, application) {
       `**Ticket:** ${channel} (${channel.id})`,
       '',
       '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
-      ...ACTOR_APPLICATION_QUESTIONS.map((question) => {
+      ...TRUSTED_APPLICATION_QUESTIONS.map((question) => {
         const answer = application.answers[question.key];
         return `**${question.label}:** ${answer ? question.render(answer) : 'Not answered.'}`;
       }),
@@ -1927,11 +1985,11 @@ async function submitActorApplication(channel, application) {
     try {
       await alertChannel.send({
         embeds: [archiveEmbed],
-        files: buildActorApplicationFiles(channel.id),
+        files: buildTrustedApplicationFiles(channel.id),
         allowedMentions: { parse: [] },
       });
     } catch (error) {
-      console.error('Failed to archive the actor application:', error);
+      console.error('Failed to archive the Trusted application:', error);
       notes.push('could not archive the recordings');
     }
   } else {
@@ -1959,7 +2017,7 @@ async function submitActorApplication(channel, application) {
         new EmbedBuilder()
           .setTitle('\u2705 Application submitted')
           .setDescription([
-            'Thanks for applying to become an Actor in the **Island Realm**!',
+            'Thanks for applying for **Trusted** in the **Island Realm**!',
             '',
             'Your application is now with our team and you will hear back from us shortly.',
           ].join('\n'))
@@ -1975,7 +2033,7 @@ async function submitActorApplication(channel, application) {
   }
 
   if (notes.length > 0) {
-    console.error(`Actor application ${application.reference} submitted with problems: ${notes.join('; ')}.`);
+    console.error(`Trusted application ${application.reference} submitted with problems: ${notes.join('; ')}.`);
   }
 
   return { submissionMessage, notes };
@@ -1985,7 +2043,7 @@ async function submitActorApplication(channel, application) {
  * Nudge stalled applications, then close the ones that were truly abandoned, so
  * half-finished tickets do not pile up forever.
  */
-async function sweepStaleActorApplications(client) {
+async function sweepStaleTrustedApplications(client) {
   if (!isApplicationStoreReady()) {
     return { reminded: 0, closed: 0 };
   }
@@ -2006,28 +2064,28 @@ async function sweepStaleActorApplications(client) {
         continue;
       }
 
-      if (idleMs >= ACTOR_APP_ABANDON_AFTER_MS) {
+      if (idleMs >= TRUSTED_APP_ABANDON_AFTER_MS) {
         try {
           const applicant = await channel.guild.members.fetch(application.applicant_id);
           await applicant.send(
-            'Your Island Realm actor application was closed because it sat unfinished for too long. You are welcome to start a new one whenever you are ready.',
+            'Your Island Realm Trusted application was closed because it sat unfinished for too long. You are welcome to start a new one whenever you are ready.',
           );
         } catch (error) {
           console.error('Failed to DM an applicant about an abandoned application:', error);
         }
 
-        await channel.delete('Actor application abandoned.').catch((error) => {
+        await channel.delete('Trusted application abandoned.').catch((error) => {
           console.error('Failed to delete an abandoned application channel:', error);
         });
         summary.closed += 1;
         continue;
       }
 
-      if (idleMs >= ACTOR_APP_REMINDER_AFTER_MS && !application.reminded_at) {
+      if (idleMs >= TRUSTED_APP_REMINDER_AFTER_MS && !application.reminded_at) {
         try {
           const applicant = await channel.guild.members.fetch(application.applicant_id);
           await applicant.send(
-            `You still have an unfinished actor application in ${channelMention(application.channel_id)}. Reply there to pick up where you left off.`,
+            `You still have an unfinished Trusted application in ${channelMention(application.channel_id)}. Reply there to pick up where you left off.`,
           );
         } catch (error) {
           console.error('Failed to DM an application reminder:', error);
@@ -2037,7 +2095,7 @@ async function sweepStaleActorApplications(client) {
         summary.reminded += 1;
       }
     } catch (error) {
-      console.error(`Failed to sweep actor application ${application.channel_id}:`, error);
+      console.error(`Failed to sweep Trusted application ${application.channel_id}:`, error);
     }
   }
 
@@ -2084,12 +2142,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: `Northstar Utils v${BOT_VERSION}`,
           },
           {
-            name: '\ud83c\udfad Actor applications reworked',
-            value: 'Applying for Actor no longer opens a form. The bot now asks the questions one at a time in your ticket and records each reply: Minecraft username, age, a voiceover of a randomly assigned audition piece, and a short introduction recording. At the end you can review everything and redo any answer before sending it. Submitting clears the ticket down to one embed with both recordings, hands it to the team with Accept / Reject buttons, and DMs you a confirmation. `/accept` and `/reject` no longer apply to actor tickets.',
+            name: '\ud83c\udfad Trusted applications (renamed + reworked)',
+            value: 'The Actor application is now the **Trusted** application, and applying no longer opens a form. The bot asks the questions one at a time in your ticket and records each reply: Minecraft username, age, a voiceover of a randomly assigned audition piece, and a short introduction recording. At the end you can review everything and redo any answer before sending it. Submitting clears the ticket down to one embed with both recordings, hands it to the team with Accept / Reject buttons, and DMs you a confirmation. `/accept` and `/reject` no longer apply to these tickets. Tickets and panels from before the rename keep working.',
           },
           {
             name: '\ud83c\udfad Split application panels',
-            value: '`postactorembed` and `postbuilderembed` replace `postappembed`, so the Actor and Builder panels can live in different channels.',
+            value: '`posttrustedembed` and `postbuilderembed` replace `postappembed`, so the Trusted and Builder panels can live in different channels.',
           },
           {
             name: '\ud83c\udfac Scene tickets (NEW)',
@@ -2113,7 +2171,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           },
           {
             name: '\ud83c\udfab Ticket type routing',
-            value: 'Ticket commands now read from one structured ticket type registry. `/reject` works in media tickets, `/accept` deliberately does not, and actor/builder tickets behave exactly as before.',
+            value: 'Ticket commands now read from one structured ticket type registry, and refusal messages list the ticket types each command actually applies to instead of hardcoding them.',
           },
           {
             name: '/project command (NEW)',
@@ -3278,7 +3336,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  if (interaction.isButton() && interaction.customId === APPLY_BUTTON_ID) {
+  if (interaction.isButton() && [APPLY_BUTTON_ID, LEGACY_APPLY_BUTTON_ID].includes(interaction.customId)) {
     if (!interaction.inGuild() || !interaction.guild) {
       await interaction.reply({
         content: 'Applications can only be started inside the server.',
@@ -3295,11 +3353,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const existingChannel = findExistingActorApplicationChannel(interaction.guild, interaction.user.id);
+    const existingChannel = findExistingTrustedApplicationChannel(interaction.guild, interaction.user.id);
     if (existingChannel) {
       await interaction.reply({
         flags: MessageFlags.Ephemeral,
-        content: `You already have an open actor application channel: ${existingChannel}`,
+        content: `You already have an open Trusted application channel: ${existingChannel}`,
       });
       return;
     }
@@ -3309,7 +3367,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const retryAt = Math.floor(new Date(activeBlock.expires_at).getTime() / 1000);
       await interaction.reply({
         flags: MessageFlags.Ephemeral,
-        content: `Your last actor application was not successful. You can apply again <t:${retryAt}:R>.`,
+        content: `Your last Trusted application was not successful. You can apply again <t:${retryAt}:R>.`,
       });
       return;
     }
@@ -3317,7 +3375,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const usernamePart = sanitizeChannelPart(interaction.user.username).slice(0, 94);
-    const channelName = getUniqueActorChannelName(interaction.guild, usernamePart);
+    const channelName = getUniqueTrustedChannelName(interaction.guild, usernamePart);
     const auditionTest = pickAuditionTest();
 
     let applicationChannel = null;
@@ -3358,12 +3416,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       applicationChannel = await interaction.guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
-        topic: `${ACTOR_TOPIC_PREFIX}${interaction.user.id}:status:open`,
+        topic: `${TRUSTED_TOPIC_PREFIX}${interaction.user.id}:status:open`,
         permissionOverwrites,
-        reason: `Actor application started by ${interaction.user.tag}`,
+        reason: `Trusted application started by ${interaction.user.tag}`,
       });
     } catch (error) {
-      console.error('Failed to create actor application channel:', error);
+      console.error('Failed to create Trusted application channel:', error);
       await interaction.editReply('I could not create your application channel. Check my channel permissions.');
       return;
     }
@@ -3379,8 +3437,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         auditionKey: auditionTest.key,
       });
     } catch (error) {
-      console.error('Failed to start an actor application record:', error);
-      await applicationChannel.delete('Actor application could not be started.').catch(() => null);
+      console.error('Failed to start a Trusted application record:', error);
+      await applicationChannel.delete('Trusted application could not be started.').catch(() => null);
       await interaction.editReply('I could not start your application. Please try again shortly.');
       return;
     }
@@ -3388,11 +3446,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await applicationChannel.send({
       embeds: [
         new EmbedBuilder()
-          .setTitle('\ud83c\udfad Actor Application')
+          .setTitle('\ud83c\udfad Trusted Application')
           .setDescription([
-            `Hey <@${interaction.user.id}>, thanks for applying to become an Actor in our series!`,
+            `Hey <@${interaction.user.id}>, thanks for applying for **Trusted** in our series!`,
             '',
-            `I will ask you **${ACTOR_APPLICATION_QUESTIONS.length} questions**, one at a time. Just reply in this channel and your next message is recorded as the answer.`,
+            `I will ask you **${TRUSTED_APPLICATION_QUESTIONS.length} questions**, one at a time. Just reply in this channel and your next message is recorded as the answer.`,
             '',
             'At the end you can review everything and change any answer before it goes to our team.',
           ].join('\n'))
@@ -3402,7 +3460,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       allowedMentions: { users: [interaction.user.id] },
     });
 
-    await postActorQuestion(applicationChannel, application, 0);
+    await postTrustedQuestion(applicationChannel, application, 0);
 
     await interaction.editReply(`Your application has started in ${applicationChannel}.`);
     return;
@@ -3550,10 +3608,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // ---------------------------------------------- actor application review
+  // -------------------------------------------- Trusted application review
   if (
     interaction.isButton() &&
-    (interaction.customId === ACTOR_APP_DONE_ID || interaction.customId === ACTOR_APP_EDIT_ID)
+    [TRUSTED_APP_DONE_ID, LEGACY_TRUSTED_APP_DONE_ID, TRUSTED_APP_EDIT_ID, LEGACY_TRUSTED_APP_EDIT_ID]
+      .includes(interaction.customId)
   ) {
     if (!isApplicationStoreReady()) {
       await interaction.reply({ content: 'Applications are unavailable right now.', flags: MessageFlags.Ephemeral });
@@ -3576,14 +3635,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.customId === ACTOR_APP_EDIT_ID) {
+    if ([TRUSTED_APP_EDIT_ID, LEGACY_TRUSTED_APP_EDIT_ID].includes(interaction.customId)) {
       const editSelect = new StringSelectMenuBuilder()
-        .setCustomId(ACTOR_APP_EDIT_SELECT_ID)
+        .setCustomId(TRUSTED_APP_EDIT_SELECT_ID)
         .setPlaceholder('Which answer do you want to change?')
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(
-          ACTOR_APPLICATION_QUESTIONS.map((question, index) => ({
+          TRUSTED_APPLICATION_QUESTIONS.map((question, index) => ({
             label: question.label,
             value: String(index),
             emoji: question.emoji,
@@ -3603,9 +3662,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.message.edit({ components: [] }).catch(() => null);
 
     try {
-      await submitActorApplication(interaction.channel, application);
+      await submitTrustedApplication(interaction.channel, application);
     } catch (error) {
-      console.error('Failed to submit an actor application:', error);
+      console.error('Failed to submit a Trusted application:', error);
       await interaction.followUp({
         content: 'Something went wrong submitting your application. Please tell a staff member.',
         flags: MessageFlags.Ephemeral,
@@ -3614,7 +3673,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  if (interaction.isStringSelectMenu() && interaction.customId === ACTOR_APP_EDIT_SELECT_ID) {
+  if (
+    interaction.isStringSelectMenu() &&
+    [TRUSTED_APP_EDIT_SELECT_ID, LEGACY_TRUSTED_APP_EDIT_SELECT_ID].includes(interaction.customId)
+  ) {
     if (!isApplicationStoreReady()) {
       await interaction.reply({ content: 'Applications are unavailable right now.', flags: MessageFlags.Ephemeral });
       return;
@@ -3627,7 +3689,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const stepIndex = Number.parseInt(interaction.values[0], 10);
-    const question = ACTOR_APPLICATION_QUESTIONS[stepIndex];
+    const question = TRUSTED_APPLICATION_QUESTIONS[stepIndex];
     if (!question) {
       await interaction.reply({ content: 'That is not one of the questions.', flags: MessageFlags.Ephemeral });
       return;
@@ -3644,14 +3706,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       components: [],
     });
 
-    await postActorQuestion(interaction.channel, editing, stepIndex);
+    await postTrustedQuestion(interaction.channel, editing, stepIndex);
     return;
   }
 
-  // ------------------------------------------- actor application decisions
+  // ----------------------------------------- Trusted application decisions
   if (
     interaction.isButton() &&
-    (interaction.customId.startsWith(`${ACTOR_APP_ACCEPT_ID}:`) || interaction.customId.startsWith(`${ACTOR_APP_REJECT_ID}:`))
+    [TRUSTED_APP_ACCEPT_ID, LEGACY_TRUSTED_APP_ACCEPT_ID, TRUSTED_APP_REJECT_ID, LEGACY_TRUSTED_APP_REJECT_ID]
+      .some((prefix) => interaction.customId.startsWith(`${prefix}:`))
   ) {
     if (!isAuthorized(interaction)) {
       await interaction.reply({
@@ -3661,7 +3724,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const isAccept = interaction.customId.startsWith(`${ACTOR_APP_ACCEPT_ID}:`);
+    const isAccept = [TRUSTED_APP_ACCEPT_ID, LEGACY_TRUSTED_APP_ACCEPT_ID]
+      .some((prefix) => interaction.customId.startsWith(`${prefix}:`));
     const buttonApplicantId = interaction.customId.slice(interaction.customId.indexOf(':') + 1);
     const topicApplicantId = getApplicantIdFromChannel(interaction.channel);
 
@@ -3684,20 +3748,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const statusNotes = [];
 
     if (isAccept) {
-      let role = interaction.guild.roles.cache.get(ACTOR_ROLE_ID) ?? null;
+      let role = interaction.guild.roles.cache.get(TRUSTED_ROLE_ID) ?? null;
       if (!role) {
-        role = await interaction.guild.roles.fetch(ACTOR_ROLE_ID).catch(() => null);
+        role = await interaction.guild.roles.fetch(TRUSTED_ROLE_ID).catch(() => null);
       }
 
       if (!role) {
-        await interaction.editReply('The Actor role could not be found. Nothing was changed.');
-        await interaction.message.edit({ components: buildActorDecisionComponents(topicApplicantId) }).catch(() => null);
+        await interaction.editReply('The Trusted role could not be found. Nothing was changed.');
+        await interaction.message.edit({ components: buildTrustedDecisionComponents(topicApplicantId) }).catch(() => null);
         return;
       }
 
       if (!canBotAssignRole(interaction.guild, role)) {
         await interaction.editReply(`I cannot assign **${role.name}**. Check Manage Roles and my role position. Nothing was changed.`);
-        await interaction.message.edit({ components: buildActorDecisionComponents(topicApplicantId) }).catch(() => null);
+        await interaction.message.edit({ components: buildTrustedDecisionComponents(topicApplicantId) }).catch(() => null);
         return;
       }
 
@@ -3711,16 +3775,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       try {
-        await applicantMember.roles.add(role, `Actor application accepted by ${interaction.user.tag}`);
+        await applicantMember.roles.add(role, `Trusted application accepted by ${interaction.user.tag}`);
       } catch (error) {
-        console.error('Failed to grant the actor role:', error);
-        await interaction.editReply('Failed to grant the Actor role. Nothing was changed.');
-        await interaction.message.edit({ components: buildActorDecisionComponents(topicApplicantId) }).catch(() => null);
+        console.error('Failed to grant the Trusted role:', error);
+        await interaction.editReply('Failed to grant the Trusted role. Nothing was changed.');
+        await interaction.message.edit({ components: buildTrustedDecisionComponents(topicApplicantId) }).catch(() => null);
         return;
       }
 
       try {
-        await applicantMember.send({ embeds: [buildAcceptanceEmbed(topicApplicantId, 'Actor')] });
+        await applicantMember.send({ embeds: [buildAcceptanceEmbed(topicApplicantId, 'Trusted')] });
       } catch (error) {
         console.error('Failed to DM the accepted applicant:', error);
         statusNotes.push('\u26a0\ufe0f Their DMs are closed, so they were not notified.');
@@ -3728,7 +3792,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else {
       try {
         const applicantMember = await interaction.guild.members.fetch(topicApplicantId);
-        await applicantMember.send('Your Actor application in Island SMP has been rejected. Thank you for your interest!');
+        await applicantMember.send('Your Trusted application in Island SMP has been rejected. Thank you for your interest!');
       } catch (error) {
         console.error('Failed to DM the rejected applicant:', error);
         statusNotes.push('\u26a0\ufe0f Their DMs are closed, so they were not notified.');
@@ -3738,23 +3802,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
         blockApplicant({
           guildId: interaction.guild.id,
           userId: topicApplicantId,
-          reason: `Actor application rejected by ${interaction.user.tag}`,
-          durationMs: ACTOR_REAPPLY_COOLDOWN_MS,
+          reason: `Trusted application rejected by ${interaction.user.tag}`,
+          durationMs: TRUSTED_REAPPLY_COOLDOWN_MS,
         });
       } catch (error) {
-        console.error('Failed to record the actor re-apply cooldown:', error);
+        console.error('Failed to record the Trusted re-apply cooldown:', error);
         statusNotes.push('\u26a0\ufe0f The re-apply cooldown could not be saved.');
       }
     }
 
     const outcomeEmbed = new EmbedBuilder()
-      .setTitle(`Action Report - Actor Application ${isAccept ? 'Accepted' : 'Rejected'}`)
+      .setTitle(`Action Report - Trusted Application ${isAccept ? 'Accepted' : 'Rejected'}`)
       .setDescription(truncateForEmbed([
         `**Reference:** ${reference}`,
         `**Applicant:** <@${topicApplicantId}> (${topicApplicantId})`,
         `**Username:** ${applicantLabel}`,
         `**Decided By:** <@${interaction.user.id}> \u2013 \`${formatUserLabel(interaction.user)}\``,
-        ...(isAccept ? [] : [`**Can reapply:** <t:${Math.floor((Date.now() + ACTOR_REAPPLY_COOLDOWN_MS) / 1000)}:R>`]),
+        ...(isAccept ? [] : [`**Can reapply:** <t:${Math.floor((Date.now() + TRUSTED_REAPPLY_COOLDOWN_MS) / 1000)}:R>`]),
       ].join('\n'), 4096))
       .setColor(isAccept ? 0x2ECC71 : 0xFF0000)
       .setTimestamp();
@@ -3767,7 +3831,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     ].join('\n'));
 
     try {
-      await interaction.guild.channels.delete(interaction.channelId, `Actor application ${isAccept ? 'accepted' : 'rejected'} by ${interaction.user.tag}`);
+      await interaction.guild.channels.delete(interaction.channelId, `Trusted application ${isAccept ? 'accepted' : 'rejected'} by ${interaction.user.tag}`);
     } catch (error) {
       console.error('Failed to delete the decided application channel:', error);
     }
@@ -4358,7 +4422,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!applicantId) {
       await interaction.reply({
-        content: 'Could not find applicant ID. Make sure this command is run in an actor or builder application channel.',
+        content: `Could not find applicant ID. Make sure this command is run in a ${describeTicketTypesFor('supportsAccept')} application channel.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -4368,7 +4432,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!ticketType?.supportsAccept) {
       await interaction.reply({
-        content: 'This command can only be used in actor or builder application channels.',
+        content: `This command can only be used in ${describeTicketTypesFor('supportsAccept')} application channels.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -4454,7 +4518,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!ticketType?.supportsReject) {
       await interaction.reply({
-        content: 'This command can only be used in actor, builder or media application channels.',
+        content: `This command can only be used in ${describeTicketTypesFor('supportsReject')} application channels.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -4509,8 +4573,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .addFields(
             { name:"Can I join on Bedrock?", value:"No, this server is Java Edition only."},
             { name:"Can cracked users join?", value:"No, this server is premium and we follow the Mojang EULA."},
-            { name:"How do I apply?", value:`${channelMention('1156739680994328616')} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`},
-            { name:"What happens after I apply?", value:"After you submit your application, a new channel will be created for you where you will be asked to submit an acting test. Our team will review your application and acting test, and if you are accepted, you will receive a role that gives you access to the actor channels and updates about the series. Do note that being accepted can take up to a day or two, depending on how our managers are."},
+            { name:"How do I apply?", value:`${channelMention(HOW_APPLY_CHANNEL_ID)} is where you can apply for the Trusted role in our series! Click the button there and a private ticket opens for you.`},
+            { name:"What happens after I apply?", value:"The bot asks you a few questions in your ticket, one at a time, and records each reply. Two of them need a short voice recording, so have a microphone ready. You get to review everything and change any answer before it goes to our team. Being accepted can take a day or two, depending on how our managers are."},
             { name:"What is the IP?", value:"This is not a public SMP. There is no IP to join, and you cannot play whenever you'd like. You can only play when we host recording events in order to contribute to our storyline. For more information, do /faq in #faq."}
         )
         .setColor(0x242429);
@@ -4538,10 +4602,10 @@ client.on(Events.ChannelDelete, async (channel) => {
 
   try {
     if (isApplicationStoreReady() && deleteApplication(channel.id) > 0) {
-      console.log(`Cleaned up the actor application for deleted channel ${channel.id}.`);
+      console.log(`Cleaned up the Trusted application for deleted channel ${channel.id}.`);
     }
   } catch (error) {
-    console.error('Failed to clean up actor application data for a deleted channel:', error);
+    console.error('Failed to clean up Trusted application data for a deleted channel:', error);
   }
 });
 
@@ -4613,19 +4677,19 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // Actor application answers.
+  // Trusted application answers.
   //
   // This sits above every other trigger on purpose. The bot-mention branch below
   // returns for any non-owner, and message.mentions.users includes the
   // replied-to author - so an applicant replying to one of the bot's questions
   // would have their answer silently swallowed. The how/apply and how/join
   // triggers further down also lack a return and would fire on innocent answers.
-  if (isActorApplicationChannel(message.channel) && isApplicationStoreReady()) {
+  if (isTrustedApplicationChannel(message.channel) && isApplicationStoreReady()) {
     let application = null;
     try {
       application = getApplication(message.channel.id);
     } catch (error) {
-      console.error('Failed to read an actor application while handling a message:', error);
+      console.error('Failed to read a Trusted application while handling a message:', error);
       application = null;
     }
 
@@ -4636,7 +4700,7 @@ client.on(Events.MessageCreate, async (message) => {
       Number.isInteger(application.current_step);
 
     if (awaitingAnswer) {
-      const question = ACTOR_APPLICATION_QUESTIONS[application.current_step];
+      const question = TRUSTED_APPLICATION_QUESTIONS[application.current_step];
 
       if (question) {
         const result = question.audio ?
@@ -4673,9 +4737,9 @@ client.on(Events.MessageCreate, async (message) => {
         }
 
         try {
-          await advanceActorApplication(message.channel, application, question, answer);
+          await advanceTrustedApplication(message.channel, application, question, answer);
         } catch (error) {
-          console.error('Failed to advance an actor application:', error);
+          console.error('Failed to advance a Trusted application:', error);
           await message.reply({
             content: 'Something went wrong recording that answer. Please try again.',
             allowedMentions: { parse: [] },
@@ -4752,13 +4816,14 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (normalizedContent === 'postactorembed') {
+  // postactorembed is the pre-rename name, kept so muscle memory still works.
+  if (normalizedContent === 'posttrustedembed' || normalizedContent === 'postactorembed') {
     if (message.author.id !== ALLOWED_USER_ID) return;
     await message.delete();
 
-    const actorEmbed = new EmbedBuilder()
-        .setTitle('🎭 Actor Applications')
-        .setDescription('Open a ticket to apply to become an Actor in our series.\n------------------------------------------------')
+    const trustedEmbed = new EmbedBuilder()
+        .setTitle('🎭 Trusted Applications')
+        .setDescription('Open a ticket to apply for the Trusted role in our series.\n------------------------------------------------')
         .setColor(0x242429)
         .addFields(
             { name: 'Requirements', value: '➡️ **Be at least 16 years old.**\n➡️ Have a microphone.\n➡️ Speak fluent english.' },
@@ -4766,15 +4831,15 @@ client.on(Events.MessageCreate, async (message) => {
         )
         .setFooter({ text: 'Click on the button below to begin your application!' });
 
-    const actorButtonRow = new ActionRowBuilder().addComponents(
+    const trustedButtonRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(APPLY_BUTTON_ID)
-        .setLabel('Apply for Actor')
+        .setLabel('Apply for Trusted')
         .setEmoji('🎭')
         .setStyle(ButtonStyle.Primary),
     );
 
-    await message.channel.send({ embeds: [actorEmbed], components: [actorButtonRow] });
+    await message.channel.send({ embeds: [trustedEmbed], components: [trustedButtonRow] });
     return;
   }
 
@@ -4945,7 +5010,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (message.content.includes("how") && message.content.includes("apply")) {
     await message.reply(
-        {content:`${channelMention(HOW_APPLY_CHANNEL_ID)} is where you can apply to become an actor in our series! Just click the button there and fill out the form to start your application.`}
+        {content:`${channelMention(HOW_APPLY_CHANNEL_ID)} is where you can apply for the Trusted role in our series! Click the button there and a private ticket opens for you.`}
     );
   }
   if (message.content.includes("how") && message.content.includes("join")) {
@@ -4958,7 +5023,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.author.id !== ALLOWED_USER_ID) return;
     const embed = new EmbedBuilder()
         .setTitle('📌 Information')
-        .setDescription(`➡️ **What is Island SMP?**\nIsland SMP is a new scripted SMP content series which aims to bring cinematography and epicness to the Minecraft scene.\n\n➡️ **How do I apply?**\nTo apply, simply go to ${channelMention('1156739680994328616')} and click the "Apply for Actor" button. Fill out the form, and our team will review your application.\n\n➡️ **What are the requirements?**\n- Be at least 16 years old.\n- Have a microphone.\n- Speak fluent English.\n\n➡️ **What happens after I apply?**\nAfter you submit your application, a new channel will be created for you where you will be asked to submit an acting test. Our team will review your application and acting test, and if you are accepted, you will receive a role that gives you access to the actor channels and updates about the series. Do note that being accepted can take up to a day or two, depending on how our managers are.\n\n➡️ **Further Clarification**\nThis is not a public SMP. There is no IP to join, and you cannot play whenever you'd like. You can only play when we host recording events in order to contribute to our storyline. For more information, do /faq in ${channelMention('1156740100076617728')}.`)
+        .setDescription(`➡️ **What is Island SMP?**\nIsland SMP is a new scripted SMP content series which aims to bring cinematography and epicness to the Minecraft scene.\n\n➡️ **How do I apply?**\nGo to ${channelMention(HOW_APPLY_CHANNEL_ID)} and click the "Apply for Trusted" button. A private ticket opens for you.\n\n➡️ **What are the requirements?**\n- Be at least 16 years old.\n- Have a microphone.\n- Speak fluent English.\n\n➡️ **What happens after I apply?**\nThe bot asks you a few questions in your ticket, one at a time, and records each reply. Two of them need a short voice recording, so have a microphone ready. You get to review everything and change any answer before it goes to our team, and if you are accepted you receive the Trusted role and access to the member channels. Being accepted can take a day or two, depending on how our managers are.\n\n➡️ **Further Clarification**\nThis is not a public SMP. There is no IP to join, and you cannot play whenever you'd like. You can only play when we host recording events in order to contribute to our storyline. For more information, do /faq in ${channelMention('1156740100076617728')}.`)
         .setColor(0x242429);
 
     await message.delete();

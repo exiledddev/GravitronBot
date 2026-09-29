@@ -18,13 +18,13 @@ const commands = [
 
   new SlashCommandBuilder()
       .setName('accept')
-      .setDescription('Accept an actor application by providing the applicant\'s username.')
+      .setDescription('Accept the application in this ticket channel.')
       .toJSON(),
 
 
   new SlashCommandBuilder()
       .setName('reject')
-      .setDescription('Reject an actor application by providing the applicant\'s username.')
+      .setDescription('Reject the application in this ticket channel.')
       .toJSON(),
 
   new SlashCommandBuilder()
