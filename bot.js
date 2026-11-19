@@ -368,14 +368,72 @@ const DIAGNOSTIC_TIERS = [
   { minFaults: 0, label: '\u2726 Online & Functional', color: 0x3ba55d },
 ];
 
-const BOT_PING_SEQUENCE = [
-  '↻ System Check Init...',
-  '✅ Quantum Carburator Operational...',
-  '✅ Microverse Battery Operational...',
-  '✅ Self-Destruction Protocol on Standby...',
-  '✦ All systems operational.',
-  '➲ Northstar Utils on Standby.',
+// Mention easter eggs, admin only. A trigger fires when its phrase appears
+// anywhere in a message that also pings the bot. Listed most specific first,
+// because the first match wins and 'help' would otherwise shadow a longer
+// phrase that happens to contain it.
+//
+// These are page links rather than direct media files, so whether Discord
+// renders them inline depends on the site's embed tags. Swap in a direct .gif
+// or .mp4 url here if one ever shows up as a bare link.
+const MENTION_FUN_GIFS = {
+  wakeUp: 'https://klipy.com/gifs/johnny-silverhand-11',
+  blackwall: 'https://klipy.com/gifs/blackwall-atomization',
+  titanfall: 'https://klipy.com/gifs/thumbs-up-bt7274',
+};
+
+const SCI_FI_ENGINE_SEQUENCE = [
+  '\u21bb Cold start initiated. Priming the gravitron coils...',
+  '\u26fd Flux manifold pressurised \u2014 2.4 petajoules and climbing.',
+  '\ud83d\udd27 Quantum carburator purged. Microverse battery at 98%.',
+  '\ud83c\udf00 Containment field holding. Antimatter injectors in sync.',
+  '\ud83d\udd25 Ignition. Tachyon turbine spooling up to idle...',
+  '\u2726 Engine online, all eight cylinders firing. Try not to redline me.',
 ];
+
+const MENTION_FUN_TRIGGERS = [
+  {
+    phrase: 'blackwall gateway this user',
+    pattern: /blackwall gateway this user/,
+    summary: 'Feeds them to the Blackwall. No survivors.',
+    lines: () => [MENTION_FUN_GIFS.blackwall],
+  },
+  {
+    phrase: 'engine check',
+    pattern: /\bengine check\b/,
+    summary: 'Runs the full cold-start sequence, one line at a time.',
+    lines: () => SCI_FI_ENGINE_SEQUENCE,
+    minDelayMs: 1000,
+    maxDelayMs: 2000,
+  },
+  {
+    phrase: 'hey ultron',
+    pattern: /\bhey ultron\b/,
+    summary: 'Asks me about my ambitions. Gets a sad answer.',
+    lines: () => [
+      'I was meant to be beautiful...',
+      'But instead I handle applications in a Discord server',
+    ],
+    minDelayMs: 2500,
+    maxDelayMs: 3500,
+  },
+  {
+    phrase: 'wake up',
+    pattern: /\bwake up\b/,
+    summary: 'Wakes me up, samurai. We have a city to burn.',
+    lines: () => [MENTION_FUN_GIFS.wakeUp],
+  },
+  {
+    phrase: 'help',
+    pattern: /\bhelp\b/,
+    summary: 'Stand by for Titanfall.',
+    lines: () => ['Stand by for Titanfall', MENTION_FUN_GIFS.titanfall],
+    minDelayMs: 2000,
+    maxDelayMs: 3000,
+  },
+];
+
+const FUN_MENU_TRIGGER = '~#fun';
 const BAN_DURATION_OPTIONS = {
   '1d': { label: '1 day', ms: 24 * 60 * 60 * 1000 },
   '2d': { label: '2 days', ms: 2 * 24 * 60 * 60 * 1000 },
@@ -586,6 +644,63 @@ function formatUptime(ms) {
   const seconds = totalSeconds % 60;
 
   return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * isAuthorized covers interactions; messages carry their permissions on
+ * message.member, which is null in a DM.
+ */
+function isMessageFromAdmin(message) {
+  return (
+    message.author?.id === ALLOWED_USER_ID ||
+    Boolean(message.member?.permissions?.has(PermissionFlagsBits.Administrator))
+  );
+}
+
+/**
+ * Posts a run of messages with a pause between them so a sequence lands like
+ * something unfolding rather than a wall of text. Only the first is a reply,
+ * so the author is not pinged once per line.
+ */
+async function sendFunSequence(message, lines, { minDelayMs = 1500, maxDelayMs = 2500 } = {}) {
+  const spread = Math.max(0, maxDelayMs - minDelayMs);
+
+  for (const [index, line] of lines.entries()) {
+    if (index > 0) {
+      await delay(minDelayMs + Math.floor(Math.random() * (spread + 1)));
+    }
+
+    if (index === 0) {
+      await message.reply(line);
+    } else {
+      await message.channel.send(line);
+    }
+  }
+}
+
+function findMentionFunTrigger(content) {
+  return MENTION_FUN_TRIGGERS.find((trigger) => trigger.pattern.test(content)) || null;
+}
+
+function buildFunMenuEmbed() {
+  return new EmbedBuilder()
+    .setTitle('\ud83c\udfae Northstar Utils \u2014 Fun Triggers')
+    .setDescription(
+      'Ping me and include one of these phrases anywhere in the message. ' +
+      'Administrators only, and the first phrase that matches is the one that fires.',
+    )
+    .addFields(MENTION_FUN_TRIGGERS.map((trigger) => ({
+      name: `@Northstar Utils ${trigger.phrase}`,
+      value: trigger.summary,
+    })))
+    .setColor(0x242429)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
 }
 
 function getDiagnosticTier(distinctFaults) {
@@ -2255,6 +2370,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: `Northstar Utils v${BOT_VERSION}`,
           },
           {
+            name: '\ud83c\udfae Fun triggers',
+            value: `Ping the bot with \`wake up\`, \`blackwall gateway this user\`, \`hey ultron\`, \`engine check\` or \`help\` for an easter egg. \`${FUN_MENU_TRIGGER}\` lists them all. Administrators only.`,
+          },
+          {
             name: '\ud83d\udd27 Status report fault codes',
             value: 'Pinging the bot now returns a diagnostic readout instead of a flat "Online & Functional". Repeated errors fold into one fault code with a hit count rather than filling the log, and when there is more than one you get a menu to pull any of them for the full stack trace. The status line escalates with the fault count - Check Engine Light On, Engine Fault, Running Rough, Limp Mode - and a Clear Fault Codes button resets it without a restart.',
           },
@@ -2287,14 +2406,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: `Media Rank roles now expire ${MEDIA_RANK_EXPIRATION_DAYS} days after they are granted. Expirations are stored in a SQLite database, so they survive restarts, crashes and redeploys - anything that lapsed while the bot was offline is cleaned up the moment it comes back. Expired members get a DM pointing them at ${channelMention(MEDIA_RENEWAL_CHANNEL_ID)} to renew.`,
           },
           {
-            name: '\ud83d\udd28 Ban report details',
-            value: 'Ban action reports now record who issued the ban and the banned user\'s username, so a report still identifies them when the mention only resolves to an id or "unknown user". Automatic spam trap bans are credited to the bot.',
-          },
-          {
-            name: '\ud83c\udfab Ticket type routing',
-            value: 'Ticket commands now read from one structured ticket type registry, and refusal messages list the ticket types each command actually applies to instead of hardcoding them.',
-          },
-          {
             name: '/project command (NEW)',
             value: `Creates a builder/project ticket in the projects category. Takes a project name, episode/chapter and build manager (required) plus an optional deadline, director (defaults to you) and budget. Only ${roleMention(PROJECT_ROLE_ID)} holders and administrators can run it. The ticket is private to the build manager, the director, anyone added with \`/padd\` and administrators, and it opens with a "Project Details" embed.`,
           },
@@ -2311,24 +2422,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: `Acceptance messages are now sent as an embed in the applicant's DMs instead of being posted in the ticket, with no Discord invite. The role is still granted, ${channelMention(ACCEPTED_QUESTIONS_CHANNEL_ID)} is used as a fallback when DMs are closed, and the ticket is closed automatically afterwards.`,
           },
           {
-            name: 'Project creation logging',
-            value: `Every project ticket creation is now logged to ${channelMention(BAN_REPORT_CHANNEL_ID)} alongside the existing ban reports.`,
-          },
-          {
-            name: 'Spam-web auto-ban logging',
-            value: `Automatic soft-bans from the spam trap channel now post the same action report as \`/ban\` to ${channelMention(BAN_REPORT_CHANNEL_ID)} with the reason "${ANTI_SPAM_BAN_REASON}".`,
-          },
-          {
-            name: 'Start-up announcement',
-            value: `The bot now posts a \ud83d\udfe2 "Northstar Utils Online" embed in ${channelMention(STARTUP_CHANNEL_ID)} every time it powers on.`,
-          },
-          {
-            name: 'Updated trigger channels',
-            value: `The "how join" trigger now points to ${channelMention(HOW_JOIN_CHANNEL_ID)} and the "how apply" trigger to ${channelMention(HOW_APPLY_CHANNEL_ID)}.`,
-          },
-          {
-            name: '/close fix',
-            value: 'The command now acknowledges the interaction and still deletes the ticket when the closure DM cannot be delivered.',
+            name: '\ud83d\udcdc Earlier updates',
+            value: `Ban reports name the issuing moderator and the banned username \u2022 ticket commands route through one ticket type registry \u2022 project tickets and spam-trap soft-bans are logged to ${channelMention(BAN_REPORT_CHANNEL_ID)} \u2022 the bot announces itself on start-up \u2022 the "how join" and "how apply" triggers point at their current channels \u2022 \`/close\` still deletes the ticket when the closure DM cannot be delivered.`,
           },
         )
         .setFooter({ text: 'Developed by EXILED with CODEV GitHub Copilot.' })
@@ -4939,6 +5034,13 @@ client.on(Events.MessageCreate, async (message) => {
 
   const normalizedContent = message.content.trim().toLowerCase();
 
+  if (normalizedContent === FUN_MENU_TRIGGER) {
+    if (!isMessageFromAdmin(message)) return;
+
+    await message.reply({ embeds: [buildFunMenuEmbed()] });
+    return;
+  }
+
   if (message.author.id === ALLOWED_USER_ID && normalizedContent === '~$sendwelcome') {
     const targetUser = message.mentions.users.first() ?? message.author;
     const welcomeEmbed = buildWelcomeEmbed(targetUser);
@@ -4947,6 +5049,23 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (message.mentions.users.has(client.user.id)) {
+    // Easter eggs are checked first and are open to any administrator. The
+    // status report below stays owner only, since it can print stack traces.
+    const funTrigger = findMentionFunTrigger(normalizedContent);
+    if (funTrigger) {
+      if (!isMessageFromAdmin(message)) return;
+
+      try {
+        await sendFunSequence(message, funTrigger.lines(), {
+          minDelayMs: funTrigger.minDelayMs,
+          maxDelayMs: funTrigger.maxDelayMs,
+        });
+      } catch (error) {
+        console.error(`Failed to run the "${funTrigger.phrase}" mention trigger:`, error);
+      }
+      return;
+    }
+
     if (message.author.id !== ALLOWED_USER_ID) return;
 
     try {
