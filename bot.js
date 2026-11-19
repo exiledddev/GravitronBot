@@ -112,7 +112,9 @@ client.once(Events.ClientReady, async (readyClient) => {
           }
         }
       },
-      { timezone: 'Etc/GMT-3' },
+      // The Etc/* zones invert the sign: Etc/GMT-2 is UTC+02:00, i.e. GMT+2.
+      // This is a fixed offset, so it does not follow daylight saving.
+      { timezone: 'Etc/GMT-2' },
     );
   }
 
@@ -327,103 +329,20 @@ const ANTI_SPAM_CHANNEL_NAME = 'spam-web';
 const ANTI_SPAM_TOPIC = 'northstar-antispam-trap';
 const ANTI_SPAM_BAN_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTI_SPAM_DELETE_SECONDS = 7 * 24 * 60 * 60;
-const CHAT_REVIVE_SCHEDULES = ['30 14 * * *', '0 17 * * *', '30 19 * * *', '0 22 * * *'];
+const CHAT_REVIVE_SCHEDULES = ['0 12 * * *', '0 17 * * *', '0 22 * * *'];
 const CHAT_REVIVE_ROLE_ID = '1534150069593444402';
 const BAN_REPORT_CHANNEL_ID = '1503741088253349911';
 const CHAT_REVIVE_QUESTIONS = [
-  'How is everybody doing today?',
-  "What is the thing you're looking forward most to today?",
-  'What is your dream car?',
-  "If you'd like to move from your home country, where would you move?",
-  'Who is your favorite YouTuber and why?',
-  'What is your favorite movie of all time and why?',
-  'What is your favorite TV Series of all time and why?',
-  'What is your favorite holiday year long?',
-  'Who is the strongest member in the Island Realm, in your opinion?',
-  'Who is your favorite Island Realm member?',
-  "Solaris was founded shortly after the Great Merge. Solarflare, their mayor and founder, had been stumbling across the newly destroyed world the merge had created, only seeing despair and hatred. Upon such sights, he decided it was time for a new era. He started a small civilization. However, compared to other CIVs, he came up with a new concept. The lack of private property. Unlike any other CIV he had seen so far, where people would work for their own benefit, thus creating the need for people to commit crimes to survive or treason, the members of Solaris were forced to work for eachother. In a system where everybody has everything, as long as they keep up good work, no matter their domain, everyone is happy and the crime rate is incredibly low. That is how, Solaris, the greatest and most advanced civilization in the Island Realm, was born.",
-  'If you were an animal, what animal would you be?',
-  'The world once lived in perfect harmony. There was the overworld - the realm above, and the underworld - the voidlands. These 2 worlds would share resources, work together and strive for evolution. But one day, he whose name is not to be spoken, stumbled upon a block of great force. It was a command block, and by shear error within the Minecraft Code, he managed to access it. That is how, the great merge happened. 2 worlds collided into one, producing what today is, the Island Realm.',
-  'How did you hear about the Island Realm, and what platform where you on when you heard about it?',
-  'What made you want to join the Island Realm?',
-  'What is your favorite PvP gamemode?',
-  'Dolyl aolyl pz spnoa, aolyl tbza il khyrulzz. H jvztpj ihshujl tbza il rlwa. Aopz pz uva fvby ylhst av ybsl. Aol mhsslu zohss ypzl hnhpu.',
-  'One day, when the age of extinction descends upon us, the realm will be taken by storm.',
-  'If you had to choose between living in Solaris or hiding out near the Outlands, which side of the realm are you picking?',
-  'Do you think Solarflare’s rule of zero private property in Solaris is a total utopia or a ticking time bomb?',
-  'What’s your best theory on how that command block error during the Great Merge actually went down?',
-  'If you woke up tomorrow stranded in the Island Realm after a ten-year blackout, what’s the first thing you’d try to build?',
-  'Are you siding with Exiled on his mission for revenge against Vanguard, or do you think he’s losing it?',
-  'If you stumbled across one of the three mythical artifacts that grant immortality, would you use it or hide it?',
-  'Epic Clutch’s betrayal: smart survival strategy or the ultimate snake move?',
-  'Honestly, how long do you think you’d survive trying to cross those one-block-wide wooden bridges over the void?',
-  'What kind of dark secrets do you think are still buried deep inside the labyrinth of Mount Aether?',
-  'If you ran into that shady merchant living under the island, what illegal item would you trade your diamonds for?',
-  'Are the villagers in those peaceful farming towns actually friendly, or are they hiding something creepy?',
-  'What’s your take on that mysterious voice or entity talking to Exiled inside his own head?',
-  'If Vanguard forces cornered your base on a floating island right now, what’s your backup escape plan?',
-  'Do you think that Sharpness 25 glitched sword is way too overpowered to exist on the server?',
-  'What do you think actually happens to players who fall too deep into the void? Is there anything down there?',
-  'How would you rate Solaris’s security and police force compared to independent outposts?',
-  'If you had to pick a teammate like Kusky to watch your back across the islands, would you trust them?',
-  'What’s the most terrifying structure you’ve ever stumbled upon while exploring the outer islands?',
-  'Do you think the Outlands are genuinely cursed, or is that just server propaganda to keep people away?',
-  'If you could add any custom mechanic or item to the Island Realm lore right now, what would it be?',
-  'What do you think was going through the founder’s head when the Overworld and Voidlands first collided?',
-  'Is Topad the engineer actually helping out the realm, or is he building traps for everyone else?',
-  'If you got banished to the Outlands for a crime you didn\'t commit, how would you fight back?',
-  'What’s the deal with those creepy red-eyed structures hidden in the dark forests?',
-  'Do you think Exiled’s obsession with finding the artifacts is blinding him from the actual truth?',
-  'How do civilizations on islands the size of villages manage their food and resource supply without falling off?',
-  'If you had to join one faction in the realm - Solaris, Vanguard, or an independent crew—which one are you picking?',
-  'What’s the backstory behind that tavern on the southern side of the realm? Who actually drinks there?',
-  'Do you think Epic Clutch actually cares about the realm, or is he just playing a long game?',
-  'What kind of music do you think echoes through the void late at night?',
-  'If you found an old map with a red X drawn over a random tavern, would you actually follow it?',
-  'How do players on the server handle inventory management when everything is constantly breaking?',
-  'What’s the most valuable piece of loot you’ve ever lost to the void?',
-  'If you had to design a custom defense trap for your island base, what would it do?',
-  'Do you think the Great Merge was a total accident, or did someone cause it on purpose?',
-  'What do you think the air smells like when you’re standing 200 blocks high on Mount Aether?',
-  'If you could have a pet mob roaming around your floating island, what would you choose?',
-  'Why do you think so many players in the realm end up turning on each other in the end?',
-  'What’s your favorite piece of architecture or build in the entire Island Realm series?',
-  'If you met Exiled out on a bridge, would you trade with him or fight him?',
-  'What secrets do you think are written in those riddle books found out in the Outlands ruins?',
-  'How do you even travel between distant islands when you don’t have an elytra?',
-  'If Solaris has zero crime, how do they deal with troublemakers like Epic or Exiled?',
-  'What’s the scariest sound you can hear while mining underneath a floating mountain?',
-  'Do you think there are other survivors hiding out in dimensions we haven\'t seen yet?',
-  'If you could wield any weapon from the series - a mace, a glitched sword, or a custom bow—what’s your pick?',
-  'What’s the worst advice you could give someone exploring the Outlands for the very first time?',
-  'How do you think the economy in the Great Republic actually functions behind closed doors?',
-  'If you were directing the next episode of Island Realm, what plot twist would you drop?',
-  'At the end of the day, is saving the Island Realm even worth all the bloodshed?',
-  'What project or build are you currently working on in Minecraft right now?',
-  'What’s your go-to comfort game when you’re taking a break from building or editing?',
-  'Coffee, tea, or energy drinks when you’re pulling a late-night gaming or coding session?',
-  'What is one game soundtrack you can listen to on repeat for hours?',
-  'If you could instantly master any software or coding language, what would you pick?',
-  'What’s the best movie or series you’ve watched recently?',
-  'What song are you currently playing on repeat?',
-  'Desk setup tour in one sentence: what’s your absolute favorite piece of gear?',
-  'If you had a completely free weekend with zero responsibilities, what would you do?',
-  'What’s a niche hobby or interest you have that most people don’t know about?',
-  'What’s the best snack to have next to your keyboard while gaming?',
-  'If you could travel anywhere in the world right now for a quick weekend trip, where are you going?',
-  'Are you more of a night owl or an early bird?',
-  'What’s the most underrated game of all time in your opinion?',
-  'What’s your favorite season of the year and why?',
-  'If you could instantly teleport anywhere in your home country right now, where are you heading?',
-  'What’s a skill you wish you had learned years ago?',
-  'PC gaming or console gaming? Defend your choice.',
-  'What’s the best piece of advice you’ve ever received?',
-  'If you could add any feature to Discord right now, what would it be?',
-  'What’s your favorite kind of weather for staying inside and working on a project?',
-  'If you were an NPC in a video game, what would your default dialogue line be?',
-  'What’s the most creative thing you’ve built or made this month?',
-  'If you had to eat only one meal for the rest of your life, what would it be?',
-  'What’s everyone up to today? Drop what you\'re working on right now!'
+  'How is everybody feeling today?',
+  'What have you eaten recently?',
+  'How has your day been so far?',
+  'What are you up to right now?',
+  'Did you sleep well last night?',
+  'What are you listening to at the moment?',
+  'How was your week?',
+  'What is the weather like where you are?',
+  'Have you had anything to drink today? Stay hydrated!',
+  'What are your plans for the rest of the day?',
 ];
 const WELCOME_CHANNEL_ID = '1503766761642791014';
 const WELCOME_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1484895910499586069/1544300979577425960/POWER_fr.png?ex=6a9801dd&is=6a96b05d&hm=fb682156ea1b406e0e97096a774c0bcb56ae133d83a4ba206733f7a87ad0e583&';
@@ -621,8 +540,20 @@ const DURATION_UNIT_MS = {
   seconds: 1000,
 };
 
+// With a short pool and three pings a day, plain random picks the same
+// question back to back often enough to look broken, so the previous one is
+// excluded from the draw.
+let lastChatReviveQuestion = null;
+
 function getRandomQuestion() {
-  return CHAT_REVIVE_QUESTIONS[Math.floor(Math.random() * CHAT_REVIVE_QUESTIONS.length)];
+  const pool = CHAT_REVIVE_QUESTIONS.length > 1 ?
+    CHAT_REVIVE_QUESTIONS.filter((question) => question !== lastChatReviveQuestion) :
+    CHAT_REVIVE_QUESTIONS;
+
+  const question = pool[Math.floor(Math.random() * pool.length)];
+  lastChatReviveQuestion = question;
+
+  return question;
 }
 
 function formatUptime(ms) {
@@ -2140,6 +2071,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           {
             name: 'Version',
             value: `Northstar Utils v${BOT_VERSION}`,
+          },
+          {
+            name: '\ud83d\udcac Chat revive pings',
+            value: 'Chat revive now pings three times a day - 12:00, 17:00 and 22:00 (GMT+2) - instead of four, and asks a short everyday question such as "How is everybody feeling today?" or "What have you eaten recently?". The lore passages and long prompts have been retired, and the same question is never asked twice in a row.',
           },
           {
             name: '\ud83c\udfad Trusted applications (renamed + reworked)',
