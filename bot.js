@@ -51,11 +51,17 @@ const {
   blockApplicant,
   getApplicantBlock,
 } = require('./applications');
+const {
+  recordFault,
+  listFaults,
+  getFault,
+  getFaultHeadline,
+  getDiagnostics,
+  clearFaults,
+} = require('./diagnostics');
 const { version: BOT_VERSION } = require('./package.json');
 
 const token = process.env.DISCORD_TOKEN;
-const MAX_RECENT_CONSOLE_ERRORS = 5;
-const recentConsoleErrors = [];
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in .env file.');
@@ -78,9 +84,11 @@ console.error = (...args) => {
     }
   }).join(' ');
 
-  recentConsoleErrors.push(`[${new Date().toISOString()}] ${formatted}`);
-  if (recentConsoleErrors.length > MAX_RECENT_CONSOLE_ERRORS) {
-    recentConsoleErrors.shift();
+  // Never let bookkeeping swallow the log line itself.
+  try {
+    recordFault(formatted);
+  } catch (error) {
+    originalConsoleError('Failed to record a fault:', error);
   }
 
   originalConsoleError(...args);
@@ -346,6 +354,20 @@ const CHAT_REVIVE_QUESTIONS = [
 ];
 const WELCOME_CHANNEL_ID = '1503766761642791014';
 const WELCOME_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1484895910499586069/1544300979577425960/POWER_fr.png?ex=6a9801dd&is=6a96b05d&hm=fb682156ea1b406e0e97096a774c0bcb56ae133d83a4ba206733f7a87ad0e583&';
+const STATUS_FAULT_SELECT_ID = 'status_fault_select';
+const STATUS_FAULT_CLEAR_ID = 'status_fault_clear';
+
+// The status line, as an engine-shop readout. Listed worst first so the first
+// tier the distinct fault count reaches is the one that wins, which means the
+// wording escalates on its own as more things break. {n} becomes that count.
+const DIAGNOSTIC_TIERS = [
+  { minFaults: 7, label: '\u26d4 Online \u2014 Limp Mode Engaged, Pull Over And Check Log', color: 0xed4245 },
+  { minFaults: 4, label: '\u26a0\ufe0f Online \u2014 Running Rough, Misfiring On {n} Cylinders', color: 0xe8590c },
+  { minFaults: 2, label: '\u26a0\ufe0f Online \u2014 Engine Fault, Check Log', color: 0xf2711c },
+  { minFaults: 1, label: '\u26a0\ufe0f Online \u2014 Check Engine Light On', color: 0xfaa61a },
+  { minFaults: 0, label: '\u2726 Online & Functional', color: 0x3ba55d },
+];
+
 const BOT_PING_SEQUENCE = [
   '↻ System Check Init...',
   '✅ Quantum Carburator Operational...',
@@ -564,6 +586,166 @@ function formatUptime(ms) {
   const seconds = totalSeconds % 60;
 
   return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+}
+
+function getDiagnosticTier(distinctFaults) {
+  const tier = DIAGNOSTIC_TIERS.find((candidate) => distinctFaults >= candidate.minFaults) ||
+    DIAGNOSTIC_TIERS[DIAGNOSTIC_TIERS.length - 1];
+
+  return { ...tier, label: tier.label.replace('{n}', String(distinctFaults)) };
+}
+
+function formatFaultAge(date, now = Date.now()) {
+  const seconds = Math.max(0, Math.floor((now - date.getTime()) / 1000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m ago`;
+  }
+
+  return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
+}
+
+function toDiscordRelative(date) {
+  return `<t:${Math.floor(date.getTime() / 1000)}:R>`;
+}
+
+/**
+ * The full readout for one fault. maxLength is the budget of whatever it is
+ * going into - an embed field allows 1024, a description 4096 - and the fence
+ * and header are paid for out of it before the message is truncated.
+ */
+function formatFaultDetail(fault, maxLength = 1024) {
+  const header = [
+    `First seen ${toDiscordRelative(fault.firstSeen)}`,
+    `last seen ${toDiscordRelative(fault.lastSeen)}`,
+    fault.count > 1 ? `**${fault.count}** occurrences` : 'seen once',
+  ].join(' \u2022 ');
+
+  // header + newline + opening fence + body + closing fence.
+  const body = truncateForEmbed(fault.message, Math.max(16, maxLength - header.length - 12));
+
+  return `${header}\n\`\`\`\n${body}\n\`\`\``;
+}
+
+function buildClearFaultsButton() {
+  return new ButtonBuilder()
+    .setCustomId(STATUS_FAULT_CLEAR_ID)
+    .setLabel('Clear Fault Codes')
+    .setEmoji('\ud83e\uddf0')
+    .setStyle(ButtonStyle.Secondary);
+}
+
+/**
+ * The status report the bot replies with when it is pinged. Returns a whole
+ * message payload so the mention, the fault menu and the clear button all
+ * render from one place and cannot drift apart.
+ */
+function buildStatusReport(client) {
+  const faults = listFaults();
+  const summary = getDiagnostics();
+  const tier = getDiagnosticTier(summary.distinct);
+  const uptimeValue = formatUptime(client.uptime ?? (process.uptime() * 1000));
+
+  const embed = new EmbedBuilder()
+    .setTitle('Northstar Utils Status Report')
+    .setDescription(tier.label)
+    .setColor(tier.color)
+    .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
+
+  if (faults.length === 0) {
+    embed.addFields(
+      { name: 'Diagnostics', value: 'No fault codes logged since boot. Running clean.' },
+      { name: 'Uptime', value: uptimeValue },
+    );
+
+    return { embeds: [embed], components: [] };
+  }
+
+  const codeLabel = summary.distinct === 1 ? '1 fault code' : `${summary.distinct} fault codes`;
+  const hitLabel = summary.totalHits === 1 ? '1 hit' : `${summary.totalHits} hits`;
+  const droppedNote = summary.dropped > 0 ? `, ${summary.dropped} older rotated out` : '';
+
+  embed.addFields({
+    name: 'Diagnostics',
+    value: `${codeLabel}, ${hitLabel} since boot${droppedNote}.`,
+  });
+
+  // A single fault needs no menu to choose from and no list to index into, so
+  // it goes straight to the full readout rather than repeating its own headline.
+  if (faults.length === 1) {
+    embed.addFields(
+      { name: 'Fault Detail', value: formatFaultDetail(faults[0], 1024) },
+      { name: 'Uptime', value: uptimeValue },
+    );
+
+    return {
+      embeds: [embed],
+      components: [new ActionRowBuilder().addComponents(buildClearFaultsButton())],
+    };
+  }
+
+  // Numbered to match the order of the select menu below. Lines are added only
+  // while they fit the 1024 field budget, with room kept for the overflow note.
+  const lines = [];
+  let used = 0;
+  for (const [index, fault] of faults.entries()) {
+    const repeats = fault.count > 1 ? ` \`x${fault.count}\`` : '';
+    const line = `**${index + 1}.** ${toDiscordRelative(fault.lastSeen)}${repeats} ` +
+      truncateForEmbed(getFaultHeadline(fault), 120);
+
+    if (used + line.length + 1 > 984) {
+      break;
+    }
+
+    lines.push(line);
+    used += line.length + 1;
+  }
+
+  if (lines.length < faults.length) {
+    lines.push(`*+${faults.length - lines.length} more, pull them from the menu.*`);
+  }
+
+  embed.addFields(
+    { name: 'Fault Codes', value: lines.join('\n') },
+    { name: 'Uptime', value: uptimeValue },
+  );
+
+  const faultSelect = new StringSelectMenuBuilder()
+    .setCustomId(STATUS_FAULT_SELECT_ID)
+    .setPlaceholder('Pull a fault code for the full readout')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      // The log is capped at the same 25 a select menu allows, but slice anyway
+      // so a raised cap can never produce an invalid menu.
+      faults.slice(0, 25).map((fault, index) => ({
+        label: truncateForEmbed(`${index + 1}. ${getFaultHeadline(fault)}`, 100),
+        description: truncateForEmbed(
+          fault.count > 1 ?
+            `${formatFaultAge(fault.lastSeen)} \u2022 ${fault.count} hits` :
+            formatFaultAge(fault.lastSeen),
+          100,
+        ),
+        value: fault.id,
+      })),
+    );
+
+  return {
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(faultSelect),
+      new ActionRowBuilder().addComponents(buildClearFaultsButton()),
+    ],
+  };
 }
 
 function buildWelcomeEmbed(user) {
@@ -2073,6 +2255,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: `Northstar Utils v${BOT_VERSION}`,
           },
           {
+            name: '\ud83d\udd27 Status report fault codes',
+            value: 'Pinging the bot now returns a diagnostic readout instead of a flat "Online & Functional". Repeated errors fold into one fault code with a hit count rather than filling the log, and when there is more than one you get a menu to pull any of them for the full stack trace. The status line escalates with the fault count - Check Engine Light On, Engine Fault, Running Rough, Limp Mode - and a Clear Fault Codes button resets it without a restart.',
+          },
+          {
             name: '\ud83d\udcac Chat revive pings',
             value: 'Chat revive now pings three times a day - 12:00, 17:00 and 22:00 (GMT+2) - instead of four, and asks a short everyday question such as "How is everybody feeling today?" or "What have you eaten recently?". The lore passages and long prompts have been retired, and the same question is never asked twice in a row.',
           },
@@ -3269,6 +3455,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply(`Ban executed for **${userToBan.tag}** (${userIdToBan}). Ban ID: ${banTag}`);
       return;
     }
+  }
+
+  // Status report components. The mention that produces them is owner only, so
+  // the components are too - the message is public and fault text can carry
+  // channel ids, file paths and stack frames.
+  if (
+    (interaction.isStringSelectMenu() && interaction.customId === STATUS_FAULT_SELECT_ID) ||
+    (interaction.isButton() && interaction.customId === STATUS_FAULT_CLEAR_ID)
+  ) {
+    if (interaction.user.id !== ALLOWED_USER_ID) {
+      await interaction.reply({
+        content: 'Only Exiled can read the fault log.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.isButton()) {
+      const cleared = clearFaults();
+
+      // Re-render in place so the status line drops straight back to green and
+      // the menu and this button disappear with the faults they described.
+      await interaction.update(buildStatusReport(client));
+      await interaction.followUp({
+        content: cleared === 0 ?
+          'The fault log was already clear.' :
+          `Cleared ${cleared} fault code${cleared === 1 ? '' : 's'}. Engine bay wiped down.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const fault = getFault(interaction.values[0]);
+    if (!fault) {
+      await interaction.reply({
+        content: 'That fault code is not in the log any more - it was cleared, or it rotated out. Ping me again for a fresh readout.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const faultEmbed = new EmbedBuilder()
+      .setTitle(truncateForEmbed(`Fault ${fault.id.toUpperCase()} \u2014 ${getFaultHeadline(fault)}`, 256))
+      .setDescription(truncateForEmbed(formatFaultDetail(fault, 4096), 4096))
+      .setColor(0xed4245)
+      .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
+
+    await interaction.reply({ embeds: [faultEmbed], flags: MessageFlags.Ephemeral });
+    return;
   }
 
   if (interaction.isButton() && [APPLY_BUTTON_ID, LEGACY_APPLY_BUTTON_ID].includes(interaction.customId)) {
@@ -4715,22 +4950,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.author.id !== ALLOWED_USER_ID) return;
 
     try {
-      const rawErrors = recentConsoleErrors.length === 0 ?
-        'No recent console errors recorded.' :
-        recentConsoleErrors.slice(-3).reverse().join('\n');
-      const recentErrorsValue = rawErrors.length > 1024 ? `${rawErrors.slice(0, 1021)}...` : rawErrors;
-      const uptimeValue = formatUptime(client.uptime ?? (process.uptime() * 1000));
-      const statusEmbed = new EmbedBuilder()
-        .setTitle('Northstar Utils Status Report')
-        .setDescription('Online & Functional')
-        .addFields(
-          { name: 'Recent Console Errors', value: recentErrorsValue },
-          { name: 'Uptime', value: uptimeValue },
-        )
-        .setColor(0x242429)
-        .setFooter({ text: `Northstar Utils [v${BOT_VERSION}]` });
-
-      await message.reply({ embeds: [statusEmbed] });
+      await message.reply(buildStatusReport(client));
     } catch (error) {
       console.error('Failed to send status report embed on mention:', error);
     }
